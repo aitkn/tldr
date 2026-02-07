@@ -294,7 +294,23 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
       {/* Notion Configuration */}
       <SectionHeader>Notion Export</SectionHeader>
 
-      <Label>Notion API Key (Integration Token)</Label>
+      <Label>
+        Notion API Key
+        <a
+          href="https://www.notion.so/my-integrations"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            marginLeft: '6px',
+            font: 'var(--md-sys-typescale-label-small)',
+            color: 'var(--md-sys-color-primary)',
+            textDecoration: 'none',
+          }}
+          title="Create a Notion integration and copy the Internal Integration Secret"
+        >
+          Create integration &rarr;
+        </a>
+      </Label>
       <input
         type="password"
         value={local.notion.apiKey}
