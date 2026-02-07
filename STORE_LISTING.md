@@ -8,28 +8,30 @@ Use this document when filling out the Chrome Web Store submission form.
 TL;DR
 
 ## Short Description (132 chars max)
-Summarize any web page or YouTube video with AI. Supports OpenAI, Claude, Gemini, Grok, DeepSeek, and self-hosted models.
+Summarize any page or YouTube video with AI, refine via chat, and save to Notion. Bring your own key — no subscription needed.
 
 ## Detailed Description (for store listing)
 
-TL;DR gives you instant AI-powered summaries of any web page or YouTube video — right in Chrome's side panel.
+TL;DR gives you AI-powered summaries of any web page or YouTube video — right in Chrome's side panel.
 
-**How it works:**
-1. Open any page or YouTube video
-2. Click the TL;DR icon to open the side panel
-3. Hit Summarize — get a structured summary in seconds
+**Three steps to knowledge capture:**
+1. **Summarize** — Get a structured summary of any web page or YouTube video with key takeaways, notable quotes, and tags
+2. **Refine** — Chat with the AI to adjust the summary, ask follow-up questions, or dig deeper into specific topics
+3. **Save** — Export to Notion with all metadata, tags, and source links preserved
 
-**Features:**
-- Structured summaries with key takeaways, notable quotes, and related topics
-- YouTube support: summarizes transcripts and top comments
-- Google Docs support: extracts and summarizes document content
-- Chat refinement: ask follow-up questions about the content
-- Export to Notion with one click
-- Light, dark, and system themes
-- Configurable summary language and detail level
+**Works everywhere:**
+- Articles and blog posts (extracted with Mozilla Readability)
+- YouTube videos (transcripts + top comments)
+- Google Docs
+- Any web page
 
 **Bring your own API key — no subscription, no account.**
 Works with OpenAI (GPT-4o), Anthropic (Claude), Google Gemini, xAI (Grok), DeepSeek, or any self-hosted OpenAI-compatible endpoint (Ollama, vLLM, etc.)
+
+**More features:**
+- Light, dark, and system themes
+- Configurable summary language and detail level
+- Auto-translation of summaries into your preferred language
 
 **Privacy-first:** No data collection, no analytics, no backend server. Your API keys stay on your device. Content is sent directly to the AI provider you choose.
 
