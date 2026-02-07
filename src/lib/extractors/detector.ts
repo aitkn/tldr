@@ -1,0 +1,19 @@
+import type { ContentExtractor } from './types';
+import { youtubeExtractor } from './youtube';
+import { articleExtractor } from './article';
+import { genericExtractor } from './generic';
+
+const extractors: ContentExtractor[] = [
+  youtubeExtractor,
+  articleExtractor,
+  genericExtractor, // always last — fallback
+];
+
+export function detectExtractor(url: string, doc: Document): ContentExtractor {
+  for (const extractor of extractors) {
+    if (extractor.canExtract(url, doc)) {
+      return extractor;
+    }
+  }
+  return genericExtractor; // should never reach here since generic always matches
+}

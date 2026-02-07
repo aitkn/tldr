@@ -1,0 +1,347 @@
+import type { ExportAdapter, ExportResult } from './types';
+import type { SummaryDocument } from '../summarizer/types';
+import type { ExtractedContent } from '../extractors/types';
+import type { NotionConfig } from '../storage/types';
+import { markdownToNotionBlocks } from './markdown-to-notion';
+
+const NOTION_API = 'https://api.notion.com/v1';
+const NOTION_VERSION = '2022-06-28';
+
+export class NotionAdapter implements ExportAdapter {
+  readonly id = 'notion';
+  readonly name = 'Notion';
+  private config: NotionConfig;
+
+  constructor(config: NotionConfig) {
+    this.config = config;
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const response = await this.notionFetch('/users/me');
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async export(summary: SummaryDocument, content: ExtractedContent): Promise<ExportResult> {
+    // Ensure database exists
+    let databaseId = this.config.databaseId;
+    if (!databaseId) {
+      databaseId = await this.createDatabase();
+    }
+
+    // Build page properties
+    const properties = this.buildProperties(summary, content);
+
+    // Build page content blocks
+    const children = this.buildContentBlocks(summary, content);
+
+    // Create page
+    const body: Record<string, unknown> = {
+      parent: { database_id: databaseId },
+      properties,
+      children,
+    };
+
+    // Set YouTube thumbnail as cover image
+    if (content.type === 'youtube' && content.thumbnailUrl) {
+      body.cover = {
+        type: 'external',
+        external: { url: content.thumbnailUrl },
+      };
+    }
+
+    const response = await this.notionFetch('/pages', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Notion API error (${response.status}): ${errorData}`);
+    }
+
+    const page = await response.json();
+    return { url: page.url, databaseId };
+  }
+
+  private async createDatabase(): Promise<string> {
+    // First, find a page to use as parent (search for pages the integration has access to)
+    const searchResponse = await this.notionFetch('/search', {
+      method: 'POST',
+      body: JSON.stringify({
+        filter: { value: 'page', property: 'object' },
+        page_size: 1,
+      }),
+    });
+
+    if (!searchResponse.ok) throw new Error('Failed to search for parent page');
+
+    const searchData = await searchResponse.json();
+    const parentPage = searchData.results?.[0];
+    if (!parentPage) {
+      throw new Error('No pages found. Please share at least one page with your Notion integration.');
+    }
+
+    const response = await this.notionFetch('/databases', {
+      method: 'POST',
+      body: JSON.stringify({
+        parent: { page_id: parentPage.id },
+        title: [{ type: 'text', text: { content: 'TLDR Summaries' } }],
+        properties: {
+          Title: { title: {} },
+          URL: { url: {} },
+          Author: { rich_text: {} },
+          'Source Type': {
+            select: {
+              options: [
+                { name: 'YouTube Video', color: 'red' },
+                { name: 'Article', color: 'green' },
+                { name: 'Web Page', color: 'gray' },
+              ],
+            },
+          },
+          'Publish Date': { date: {} },
+          'Captured At': { date: {} },
+          Duration: { rich_text: {} },
+          Language: {
+            select: {
+              options: [
+                { name: 'en', color: 'blue' },
+                { name: 'es', color: 'yellow' },
+                { name: 'fr', color: 'purple' },
+                { name: 'de', color: 'orange' },
+              ],
+            },
+          },
+          Tags: { multi_select: {} },
+          'Reading Time': { number: {} },
+          Status: {
+            select: {
+              options: [
+                { name: 'New', color: 'blue' },
+                { name: 'Read', color: 'green' },
+                { name: 'Archived', color: 'gray' },
+              ],
+            },
+          },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Failed to create database: ${errorData}`);
+    }
+
+    const db = await response.json();
+    return db.id;
+  }
+
+  private buildProperties(summary: SummaryDocument, content: ExtractedContent): Record<string, unknown> {
+    const sourceType = content.type === 'youtube'
+      ? 'YouTube Video'
+      : content.type === 'article'
+        ? 'Article'
+        : 'Web Page';
+
+    const properties: Record<string, unknown> = {
+      Title: {
+        title: [{ text: { content: content.title } }],
+      },
+      URL: { url: content.url },
+      'Source Type': { select: { name: sourceType } },
+      'Captured At': { date: { start: new Date().toISOString() } },
+      Status: { select: { name: 'New' } },
+      'Reading Time': { number: content.estimatedReadingTime },
+    };
+
+    if (content.author) {
+      properties.Author = {
+        rich_text: [{ text: { content: content.author } }],
+      };
+    }
+
+    if (content.publishDate) {
+      try {
+        const date = new Date(content.publishDate);
+        if (!isNaN(date.getTime())) {
+          properties['Publish Date'] = { date: { start: date.toISOString().split('T')[0] } };
+        }
+      } catch {
+        // skip invalid date
+      }
+    }
+
+    if (content.duration) {
+      properties.Duration = {
+        rich_text: [{ text: { content: content.duration } }],
+      };
+    }
+
+    if (content.language) {
+      properties.Language = { select: { name: content.language } };
+    }
+
+    if (summary.tags.length > 0) {
+      properties.Tags = {
+        multi_select: summary.tags.map((tag) => ({ name: tag })),
+      };
+    }
+
+    return properties;
+  }
+
+  private buildContentBlocks(summary: SummaryDocument, content: ExtractedContent): unknown[] {
+    const blocks: unknown[] = [];
+
+    // YouTube thumbnail
+    if (content.type === 'youtube' && content.thumbnailUrl) {
+      blocks.push({
+        object: 'block',
+        type: 'image',
+        image: { type: 'external', external: { url: content.thumbnailUrl } },
+      });
+    }
+
+    // TL;DR section
+    blocks.push(
+      heading2('TL;DR'),
+      paragraph(summary.tldr),
+      divider(),
+    );
+
+    // Key Takeaways
+    if (summary.keyTakeaways.length > 0) {
+      blocks.push(heading2('Key Takeaways'));
+      for (const point of summary.keyTakeaways) {
+        blocks.push(bulletItem(point));
+      }
+      blocks.push(divider());
+    }
+
+    // Summary
+    blocks.push(heading2('Summary'));
+    const summaryBlocks = markdownToNotionBlocks(summary.summary);
+    blocks.push(...summaryBlocks);
+    blocks.push(divider());
+
+    // Notable Quotes
+    if (summary.notableQuotes.length > 0) {
+      blocks.push(heading2('Notable Quotes'));
+      for (const quote of summary.notableQuotes) {
+        blocks.push({
+          object: 'block',
+          type: 'quote',
+          quote: { rich_text: [{ type: 'text', text: { content: `"${quote}"` } }] },
+        });
+      }
+      blocks.push(divider());
+    }
+
+    // Pros and Cons
+    if (summary.prosAndCons) {
+      blocks.push(heading2('Pros & Cons'));
+      blocks.push(heading3('Pros'));
+      for (const pro of summary.prosAndCons.pros) {
+        blocks.push(bulletItem(pro));
+      }
+      blocks.push(heading3('Cons'));
+      for (const con of summary.prosAndCons.cons) {
+        blocks.push(bulletItem(con));
+      }
+      blocks.push(divider());
+    }
+
+    // Comments Highlights
+    if (summary.commentsHighlights && summary.commentsHighlights.length > 0) {
+      blocks.push(heading2('Comment Highlights'));
+      for (const highlight of summary.commentsHighlights) {
+        blocks.push(bulletItem(highlight));
+      }
+      blocks.push(divider());
+    }
+
+    // Conclusion
+    if (summary.conclusion) {
+      blocks.push(heading2('Conclusion'));
+      blocks.push(paragraph(summary.conclusion));
+      blocks.push(divider());
+    }
+
+    // Related Topics
+    if (summary.relatedTopics.length > 0) {
+      blocks.push(heading2('Related Topics'));
+      for (const topic of summary.relatedTopics) {
+        blocks.push(bulletItem(topic));
+      }
+    }
+
+    // Notion API limits children to 100 blocks per request
+    return blocks.slice(0, 100);
+  }
+
+  private async notionFetch(path: string, init?: RequestInit): Promise<Response> {
+    return fetch(`${NOTION_API}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${this.config.apiKey}`,
+        'Notion-Version': NOTION_VERSION,
+        'Content-Type': 'application/json',
+        ...(init?.headers as Record<string, string> || {}),
+      },
+    });
+  }
+}
+
+function heading2(text: string) {
+  return {
+    object: 'block',
+    type: 'heading_2',
+    heading_2: { rich_text: [{ type: 'text', text: { content: text } }] },
+  };
+}
+
+function heading3(text: string) {
+  return {
+    object: 'block',
+    type: 'heading_3',
+    heading_3: { rich_text: [{ type: 'text', text: { content: text } }] },
+  };
+}
+
+function paragraph(text: string) {
+  // Split if too long for Notion
+  if (text.length <= 2000) {
+    return {
+      object: 'block',
+      type: 'paragraph',
+      paragraph: { rich_text: [{ type: 'text', text: { content: text } }] },
+    };
+  }
+
+  // Return first 2000 chars — the rest gets truncated
+  return {
+    object: 'block',
+    type: 'paragraph',
+    paragraph: {
+      rich_text: [{ type: 'text', text: { content: text.slice(0, 2000) } }],
+    },
+  };
+}
+
+function bulletItem(text: string) {
+  return {
+    object: 'block',
+    type: 'bulleted_list_item',
+    bulleted_list_item: {
+      rich_text: [{ type: 'text', text: { content: text.slice(0, 2000) } }],
+    },
+  };
+}
+
+function divider() {
+  return { object: 'block', type: 'divider', divider: {} };
+}

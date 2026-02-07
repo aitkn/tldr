@@ -1,0 +1,188 @@
+import { detectExtractor } from '@/lib/extractors/detector';
+import { extractComments } from '@/lib/extractors/comments';
+import type { ExtractedContent } from '@/lib/extractors/types';
+import type { ExtractResultMessage, Message } from '@/lib/messaging/types';
+
+export default defineContentScript({
+  matches: ['<all_urls>'],
+
+  main() {
+    const chromeRuntime = (globalThis as unknown as { chrome: { runtime: typeof chrome.runtime } }).chrome.runtime;
+    chromeRuntime.onMessage.addListener(
+      (message: unknown, _sender: unknown, sendResponse: (response: unknown) => void) => {
+        const msg = message as { type: string; videoId?: string; hintLang?: string };
+        if (msg.type === 'EXTRACT_CONTENT') {
+          extractAndResolve()
+            .then((content) => {
+              sendResponse({ type: 'EXTRACT_RESULT', success: true, data: content } as ExtractResultMessage);
+            })
+            .catch((err) => {
+              sendResponse({
+                type: 'EXTRACT_RESULT',
+                success: false,
+                error: err instanceof Error ? err.message : String(err),
+              } as ExtractResultMessage);
+            });
+          return true;
+        }
+
+        if (msg.type === 'EXTRACT_COMMENTS') {
+          const comments = extractComments(document, window.location.href);
+          sendResponse({ success: true, comments });
+          return true;
+        }
+
+        if (msg.type === 'FETCH_TRANSCRIPT') {
+          fetchYouTubeTranscript(msg.videoId!, msg.hintLang)
+            .then((transcript) => sendResponse({ success: true, transcript }))
+            .catch((err) => sendResponse({ success: false, error: err instanceof Error ? err.message : String(err) }));
+          return true;
+        }
+      },
+    );
+  },
+});
+
+async function extractAndResolve(): Promise<ExtractedContent> {
+  const extractor = detectExtractor(window.location.href, document);
+  const content = extractor.extract(window.location.href, document);
+
+  const comments = extractComments(document, window.location.href);
+  if (comments.length > 0) {
+    content.comments = comments;
+  }
+
+  // Resolve YouTube transcript inline so the sidepanel knows immediately
+  const marker = '[YOUTUBE_TRANSCRIPT:';
+  const markerIndex = content.content.indexOf(marker);
+  if (markerIndex !== -1) {
+    const endIndex = content.content.indexOf(']', markerIndex + marker.length);
+    if (endIndex !== -1) {
+      const markerBody = content.content.slice(markerIndex + marker.length, endIndex);
+      const parts = markerBody.split(':');
+      const videoId = parts[0];
+      const hintLang = parts[1];
+
+      try {
+        const transcript = await fetchYouTubeTranscript(videoId, hintLang);
+        content.content = content.content.replace(
+          /\[Transcript available - fetching\.\.\.\]\n\n\[YOUTUBE_TRANSCRIPT:[^\]]+\]/,
+          transcript,
+        );
+        content.wordCount = content.content.split(/\s+/).filter(Boolean).length;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        content.content = content.content.replace(
+          /\[Transcript available - fetching\.\.\.\]\n\n\[YOUTUBE_TRANSCRIPT:[^\]]+\]/,
+          `*Transcript could not be loaded: ${errMsg}*`,
+        );
+      }
+    }
+  }
+
+  return content;
+}
+
+async function fetchYouTubeTranscript(videoId: string, hintLang?: string): Promise<string> {
+  // Use ANDROID innertube client from page context.
+  // - ANDROID client bypasses age-restriction checks
+  // - Page context provides YouTube cookies (avoids 403 from service worker)
+  // - Returns fresh caption URLs (unlike ytInitialPlayerResponse which has expired tokens)
+  const playerResponse = await fetch(
+    'https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'ANDROID',
+            clientVersion: '19.02.39',
+            androidSdkVersion: 34,
+            hl: hintLang || 'en',
+          },
+        },
+        videoId,
+        contentCheckOk: true,
+        racyCheckOk: true,
+      }),
+    },
+  );
+
+  if (!playerResponse.ok) throw new Error(`Innertube API: ${playerResponse.status}`);
+
+  const data = await playerResponse.json();
+  const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!tracks || tracks.length === 0) throw new Error('No caption tracks available');
+
+  // Pick best track: prefer hintLang, then manual track, then first
+  let track = hintLang
+    ? tracks.find((t: { languageCode: string }) => t.languageCode === hintLang)
+    : undefined;
+  if (!track) {
+    track = tracks.find((t: { kind?: string }) => t.kind !== 'asr') || tracks[0];
+  }
+
+  let captionUrl: string = track.baseUrl;
+  if (!captionUrl.includes('fmt=')) {
+    captionUrl += (captionUrl.includes('?') ? '&' : '?') + 'fmt=srv3';
+  }
+
+  const captionResponse = await fetch(captionUrl);
+  if (!captionResponse.ok) throw new Error(`Caption fetch: ${captionResponse.status}`);
+
+  const xml = await captionResponse.text();
+  const transcript = parseTranscriptXml(xml);
+  if (!transcript) throw new Error('Empty transcript');
+  return transcript;
+}
+
+function parseTranscriptXml(xml: string): string {
+  const segments: string[] = [];
+
+  // 1. Standard format: <text start="..." dur="...">words</text>
+  const textMatches = xml.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g);
+  for (const match of textMatches) {
+    const text = decodeXmlEntities(match[1]).trim();
+    if (text) segments.push(text);
+  }
+  if (segments.length > 0) return segments.join(' ');
+
+  // 2. SRV3 format: <p t="..." d="..."><s>word</s>...</p>
+  const pMatches = xml.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g);
+  for (const match of pMatches) {
+    const inner = match[1];
+    const sMatches = inner.matchAll(/<s[^>]*>([^<]*)<\/s>/g);
+    const words: string[] = [];
+    for (const s of sMatches) {
+      const w = decodeXmlEntities(s[1]);
+      if (w) words.push(w);
+    }
+    if (words.length > 0) {
+      segments.push(words.join('').trim());
+    } else {
+      const text = decodeXmlEntities(inner.replace(/<[^>]+>/g, '')).trim();
+      if (text) segments.push(text);
+    }
+  }
+  if (segments.length > 0) return segments.join(' ');
+
+  // 3. Flat <s> elements (rare fallback)
+  const segMatches = xml.matchAll(/<s[^>]*>([\s\S]*?)<\/s>/g);
+  for (const match of segMatches) {
+    const text = decodeXmlEntities(match[1]).trim();
+    if (text) segments.push(text);
+  }
+
+  return segments.join(' ');
+}
+
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n/g, ' ');
+}
