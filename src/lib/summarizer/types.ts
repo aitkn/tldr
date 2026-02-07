@@ -8,6 +8,7 @@ export interface SummaryDocument {
   commentsHighlights?: string[];
   relatedTopics: string[];
   tags: string[];
+  extraSections?: Array<{ title: string; content: string }>; // custom sections added via chat refinement
   sourceLanguage?: string; // detected source language code, e.g. 'ru'
   summaryLanguage?: string; // language the summary is written in, e.g. 'en'
   translatedTitle?: string; // title translated to summary language (only when translated)

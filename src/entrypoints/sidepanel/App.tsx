@@ -36,6 +36,53 @@ interface DisplayMessage {
 export function App() {
   const { mode: themeMode, setMode: setThemeMode } = useTheme();
 
+  // CSS zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0)
+  useEffect(() => {
+    const ZOOM_KEY = 'tldr-zoom';
+    const STEP = 0.1;
+    const MIN = 0.5;
+    const MAX = 2.0;
+
+    const apply = (z: number) => {
+      document.documentElement.style.zoom = String(z);
+      localStorage.setItem(ZOOM_KEY, String(z));
+    };
+
+    // Restore saved zoom
+    const saved = parseFloat(localStorage.getItem(ZOOM_KEY) || '1');
+    if (saved !== 1) apply(saved);
+
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const current = parseFloat(document.documentElement.style.zoom || '1');
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        apply(Math.min(MAX, Math.round((current + STEP) * 10) / 10));
+      } else if (e.key === '-') {
+        e.preventDefault();
+        apply(Math.max(MIN, Math.round((current - STEP) * 10) / 10));
+      } else if (e.key === '0') {
+        e.preventDefault();
+        apply(1);
+      }
+    };
+
+    const wheelHandler = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const current = parseFloat(document.documentElement.style.zoom || '1');
+      const delta = e.deltaY < 0 ? STEP : -STEP;
+      apply(Math.min(MAX, Math.max(MIN, Math.round((current + delta) * 10) / 10)));
+    };
+
+    document.addEventListener('keydown', handler);
+    document.addEventListener('wheel', wheelHandler, { passive: false });
+    return () => {
+      document.removeEventListener('keydown', handler);
+      document.removeEventListener('wheel', wheelHandler);
+    };
+  }, []);
+
   // Intercept all link clicks and open in a new window to avoid resetting the side panel
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -55,6 +102,7 @@ export function App() {
   const [extracting, setExtracting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lockedTabId, setLockedTabId] = useState<number | null>(null);
+  const [extractEpoch, setExtractEpoch] = useState(0);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
@@ -76,6 +124,7 @@ export function App() {
       const response = await sendMessage({ type: 'EXTRACT_CONTENT' }) as ExtractResultMessage;
       if (response.success && response.data) {
         setContent(response.data);
+        setExtractEpoch((n) => n + 1);
         if (response.tabId) setLockedTabId(response.tabId);
         // Reset summary & chat when page changes
         setSummary(null);
@@ -142,25 +191,39 @@ export function App() {
     };
   }, [lockedTabId, extractContent]);
 
-  // YouTube lazy-loads comments — retry a few times after extraction
+  // YouTube lazy-loads comments as the user scrolls — poll periodically to pick up new ones
   useEffect(() => {
     if (!content || content.type !== 'youtube') return;
-    if ((content.comments?.length ?? 0) > 0) return;
 
-    const delays = [3000, 6000, 10000];
-    const timers = delays.map((delay) =>
-      setTimeout(async () => {
-        try {
-          const resp = await sendMessage({ type: 'EXTRACT_COMMENTS' }) as { success: boolean; comments?: ExtractedContent['comments'] };
-          if (resp.success && resp.comments && resp.comments.length > 0) {
+    let lastCount = content.comments?.length ?? 0;
+    let stableRounds = 0;
+
+    const poll = async () => {
+      try {
+        const resp = await sendMessage({ type: 'EXTRACT_COMMENTS' }) as { success: boolean; comments?: ExtractedContent['comments'] };
+        if (resp.success && resp.comments) {
+          if (resp.comments.length > lastCount) {
+            lastCount = resp.comments.length;
+            stableRounds = 0;
             setContent((prev) => prev ? { ...prev, comments: resp.comments } : prev);
+          } else {
+            stableRounds++;
           }
-        } catch { /* ignore */ }
-      }, delay),
-    );
+        }
+      } catch { /* ignore */ }
+    };
 
-    return () => timers.forEach(clearTimeout);
-  }, [content?.url]); // re-run when URL changes, not on every content update
+    // Poll at increasing intervals; stop after count stabilizes for several rounds
+    const id = setInterval(() => {
+      if (stableRounds >= 10) { clearInterval(id); return; }
+      poll();
+    }, 5000);
+
+    // Also do an immediate check after a short delay for initial load
+    const initial = setTimeout(poll, 2000);
+
+    return () => { clearInterval(id); clearTimeout(initial); };
+  }, [extractEpoch]); // re-run on every new extraction (URL change or page refresh)
 
   // Scroll to bottom when new chat messages arrive
   useEffect(() => {
@@ -277,10 +340,11 @@ export function App() {
 
       if (json) {
         setSummary(json);
-        setToast({ message: 'Summary updated from chat', type: 'success' });
+        setToast({ message: 'Summary updated', type: 'success' });
       }
 
-      const displayText = chatText || (json ? 'Summary updated.' : response.message!);
+      // Never show raw JSON — use chat text if available, otherwise a status message
+      const displayText = chatText || (json ? 'Summary updated.' : 'Failed to update summary — please try again.');
       setChatMessages((prev) => [...prev, { role: 'assistant', content: displayText }]);
     } catch (err) {
       setChatMessages((prev) => [
@@ -476,37 +540,88 @@ export function App() {
   );
 }
 
-function extractJsonAndText(raw: string): { json: SummaryDocument | null; text: string } {
-  const fenceRegex = /```json\s*\n([\s\S]*?)```/;
-  const match = raw.match(fenceRegex);
+function normalizeSummary(parsed: Record<string, unknown>): SummaryDocument {
+  const pc = parsed.prosAndCons as { pros?: unknown; cons?: unknown } | undefined;
+  return {
+    tldr: (parsed.tldr as string) || '',
+    keyTakeaways: Array.isArray(parsed.keyTakeaways) ? parsed.keyTakeaways : [],
+    summary: (parsed.summary as string) || '',
+    notableQuotes: Array.isArray(parsed.notableQuotes) ? parsed.notableQuotes : [],
+    conclusion: (parsed.conclusion as string) || '',
+    prosAndCons: pc ? { pros: Array.isArray(pc.pros) ? pc.pros : [], cons: Array.isArray(pc.cons) ? pc.cons : [] } : undefined,
+    commentsHighlights: Array.isArray(parsed.commentsHighlights) ? parsed.commentsHighlights : undefined,
+    extraSections: Array.isArray(parsed.extraSections)
+      ? parsed.extraSections.filter((s: unknown) => s && typeof (s as Record<string, unknown>).title === 'string' && typeof (s as Record<string, unknown>).content === 'string') as Array<{ title: string; content: string }>
+      : undefined,
+    relatedTopics: Array.isArray(parsed.relatedTopics) ? parsed.relatedTopics : [],
+    tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+    sourceLanguage: (parsed.sourceLanguage as string) || undefined,
+    summaryLanguage: (parsed.summaryLanguage as string) || undefined,
+    translatedTitle: (parsed.translatedTitle as string) || undefined,
+    inferredAuthor: (parsed.inferredAuthor as string) || undefined,
+    inferredPublishDate: (parsed.inferredPublishDate as string) || undefined,
+  };
+}
 
-  if (!match) {
-    // No fenced block — try parsing the entire response as JSON (backward compat)
-    try {
-      let cleaned = raw.trim();
-      if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+/** Find the matching `}` for the `{` at position `start` using balanced-brace matching,
+ *  correctly skipping over JSON string contents (handles backticks, escapes, etc.). */
+function findMatchingBrace(raw: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    if (ch === '}') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+function extractJsonAndText(raw: string): { json: SummaryDocument | null; text: string } {
+  // Strategy 1: Look for an explicit ```json fence (the format we ask the LLM to use).
+  // Only ```json is matched — plain ``` fences are left alone since the LLM uses them
+  // in explanatory code blocks that should NOT be treated as summary updates.
+  const fenceStart = raw.indexOf('```json');
+
+  if (fenceStart !== -1) {
+    const jsonStart = raw.indexOf('{', fenceStart);
+    if (jsonStart !== -1) {
+      const jsonEnd = findMatchingBrace(raw, jsonStart);
+      let json: SummaryDocument | null = null;
+      if (jsonEnd !== -1) {
+        try {
+          const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
+          if (parsed.tldr && parsed.summary) {
+            json = normalizeSummary(parsed);
+          }
+        } catch { /* malformed JSON */ }
       }
-      const parsed = JSON.parse(cleaned);
-      if (parsed.tldr && parsed.summary) {
-        return { json: parsed, text: '' };
-      }
-    } catch { /* not JSON */ }
-    return { json: null, text: raw };
+      // Always strip the ```json block from chat text
+      const searchFrom = jsonEnd !== -1 ? jsonEnd + 1 : fenceStart + 7;
+      const closingFence = raw.indexOf('```', searchFrom);
+      const endIdx = closingFence !== -1 ? closingFence + 3 : raw.length;
+      const text = (raw.slice(0, fenceStart) + raw.slice(endIdx)).trim();
+      return { json, text };
+    }
   }
 
-  // Extract JSON from the fenced block
-  let json: SummaryDocument | null = null;
+  // Strategy 2: Entire response is JSON (no surrounding text)
   try {
-    const parsed = JSON.parse(match[1]);
-    if (parsed.tldr && parsed.summary) {
-      json = parsed;
+    let cleaned = raw.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
     }
-  } catch { /* malformed JSON */ }
+    const parsed = JSON.parse(cleaned);
+    if (parsed.tldr && parsed.summary) {
+      return { json: normalizeSummary(parsed), text: '' };
+    }
+  } catch { /* not JSON */ }
 
-  // Everything outside the fenced block is chat text
-  const text = raw.replace(fenceRegex, '').trim();
-  return { json, text };
+  return { json: null, text: raw };
 }
 
 function ContentIndicators({ content }: { content: ExtractedContent }) {

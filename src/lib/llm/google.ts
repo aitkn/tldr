@@ -28,19 +28,32 @@ export class GoogleProvider implements LLMProvider {
       body.systemInstruction = systemInstruction;
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Gemini API error (${response.status}): ${errorText}`);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Gemini API error (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new Error('Gemini request timed out after 90s');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-
-    const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   }
 
   async *streamChat(messages: ChatMessage[], options?: ChatOptions): AsyncGenerator<string> {

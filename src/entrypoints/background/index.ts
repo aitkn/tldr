@@ -21,6 +21,7 @@ export default defineBackground(() => {
       handleMessage(message as Message)
         .then(sendResponse)
         .catch((err) => {
+          console.warn(`[TLDR] ${(message as Message).type} failed:`, err);
           sendResponse({ type: (message as Message).type, success: false, error: String(err) });
         });
       return true; // keep channel open for async response
@@ -193,7 +194,8 @@ Response format rules:
 - If you want to say something to the user (explanation, answer, comment), write it as plain text OUTSIDE the code block.
 - You may include BOTH a text message and a JSON update in the same response, or just one of them.
 - When updating the summary, always return the COMPLETE JSON object (all fields), not just the changed parts.
-- Never wrap plain-text chat in a code block. Only use \`\`\`json for summary updates.`;
+- Never wrap plain-text chat in a code block. Only use \`\`\`json for summary updates.
+- To add custom sections (cheat sheets, tables, extras the user requests), use the "extraSections" array field: [{"title": "Section Name", "content": "markdown content"}]. Content supports full markdown and \`\`\`mermaid diagrams (flowchart, sequence, timeline, etc.).`;
 
     const chatMessages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -380,13 +382,25 @@ async function handleFetchModels(
 async function fetchGoogleDocText(docId: string): Promise<string> {
   // Background service worker can fetch cross-origin with cookies (host_permissions: <all_urls>)
   const url = `https://docs.google.com/document/d/${docId}/export?format=txt`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Google Docs export failed (${response.status}). The document may not be accessible.`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Google Docs export failed (${response.status}). The document may not be accessible.`);
+    }
+    const text = await response.text();
+    if (!text.trim()) {
+      throw new Error('Document appears to be empty.');
+    }
+    return text.trim();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Google Docs export timed out after 30s');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  const text = await response.text();
-  if (!text.trim()) {
-    throw new Error('Document appears to be empty.');
-  }
-  return text.trim();
 }

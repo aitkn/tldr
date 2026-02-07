@@ -273,6 +273,15 @@ export class NotionAdapter implements ExportAdapter {
       blocks.push(divider());
     }
 
+    // Extra sections (chat-added)
+    if (summary.extraSections && summary.extraSections.length > 0) {
+      for (const section of summary.extraSections) {
+        blocks.push(heading2(section.title));
+        blocks.push(...markdownToNotionBlocks(section.content));
+        blocks.push(divider());
+      }
+    }
+
     // Related Topics
     if (summary.relatedTopics.length > 0) {
       blocks.push(heading2('Related Topics'));

@@ -155,16 +155,20 @@ function parseSummaryResponse(response: string): SummaryDocument {
     if (parsed.noContent) {
       throw new NoContentError(parsed.reason || 'No meaningful content found on this page.');
     }
+    const pc = parsed.prosAndCons;
     return {
       tldr: parsed.tldr || '',
-      keyTakeaways: parsed.keyTakeaways || [],
+      keyTakeaways: Array.isArray(parsed.keyTakeaways) ? parsed.keyTakeaways : [],
       summary: parsed.summary || '',
-      notableQuotes: parsed.notableQuotes || [],
+      notableQuotes: Array.isArray(parsed.notableQuotes) ? parsed.notableQuotes : [],
       conclusion: parsed.conclusion || '',
-      prosAndCons: parsed.prosAndCons || undefined,
-      commentsHighlights: parsed.commentsHighlights || undefined,
-      relatedTopics: parsed.relatedTopics || [],
-      tags: parsed.tags || [],
+      prosAndCons: pc ? { pros: Array.isArray(pc.pros) ? pc.pros : [], cons: Array.isArray(pc.cons) ? pc.cons : [] } : undefined,
+      commentsHighlights: Array.isArray(parsed.commentsHighlights) ? parsed.commentsHighlights : undefined,
+      extraSections: Array.isArray(parsed.extraSections)
+        ? parsed.extraSections.filter((s: unknown) => s && typeof (s as Record<string, unknown>).title === 'string' && typeof (s as Record<string, unknown>).content === 'string') as Array<{ title: string; content: string }>
+        : undefined,
+      relatedTopics: Array.isArray(parsed.relatedTopics) ? parsed.relatedTopics : [],
+      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
       sourceLanguage: parsed.sourceLanguage || undefined,
       summaryLanguage: parsed.summaryLanguage || undefined,
       translatedTitle: parsed.translatedTitle || undefined,

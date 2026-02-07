@@ -108,6 +108,46 @@ function tokensToBlocks(tokens: Token[]): NotionBlock[] {
         break;
       }
 
+      case 'table': {
+        const t = token as Tokens.Table;
+        const columnCount = t.header.length;
+        const rows: NotionBlock[] = [];
+
+        // Header row
+        const headerCells = t.header.map((cell) => [
+          { type: 'text' as const, text: { content: cell.text }, annotations: { bold: true } },
+        ]);
+        rows.push({
+          object: 'block',
+          type: 'table_row',
+          table_row: { cells: headerCells },
+        });
+
+        // Body rows
+        for (const row of t.rows) {
+          const cells = row.map((cell) => inlineTokensToRichText(cell.tokens || []));
+          // Pad to column count if needed
+          while (cells.length < columnCount) cells.push([makeRichText('')]);
+          rows.push({
+            object: 'block',
+            type: 'table_row',
+            table_row: { cells },
+          });
+        }
+
+        blocks.push({
+          object: 'block',
+          type: 'table',
+          table: {
+            table_width: columnCount,
+            has_column_header: true,
+            has_row_header: false,
+            children: rows,
+          },
+        });
+        break;
+      }
+
       case 'hr': {
         blocks.push({
           object: 'block',

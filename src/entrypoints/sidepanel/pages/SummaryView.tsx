@@ -94,6 +94,15 @@ export function SummaryContent({ summary, content, onExport }: SummaryContentPro
         </Section>
       )}
 
+      {/* Extra sections (added via chat refinement) */}
+      {summary.extraSections && summary.extraSections.length > 0 && summary.extraSections.map((section, i) => (
+        <Section key={`extra-${i}`} title={section.title}>
+          <div style={{ font: 'var(--md-sys-typescale-body-medium)', lineHeight: 1.6 }}>
+            <MarkdownRenderer content={section.content} />
+          </div>
+        </Section>
+      ))}
+
       {/* Related Topics */}
       {summary.relatedTopics.length > 0 && (
         <Section title="Related Topics">
@@ -136,9 +145,9 @@ export function SummaryContent({ summary, content, onExport }: SummaryContentPro
         </div>
       )}
 
-      {/* Export action */}
-      {onExport && (
-        <div style={{ display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
+      {/* Export actions */}
+      <div style={{ display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
+        {onExport && (
           <button
             onClick={onExport}
             title="Export summary to Notion"
@@ -154,8 +163,23 @@ export function SummaryContent({ summary, content, onExport }: SummaryContentPro
           >
             Export to Notion
           </button>
-        </div>
-      )}
+        )}
+        <button
+          onClick={() => downloadMarkdown(summary, content)}
+          title="Download summary as Markdown"
+          style={{
+            padding: '8px 20px',
+            borderRadius: '20px',
+            border: '1px solid var(--md-sys-color-outline)',
+            backgroundColor: 'transparent',
+            color: 'var(--md-sys-color-on-surface)',
+            font: 'var(--md-sys-typescale-label-large)',
+            cursor: 'pointer',
+          }}
+        >
+          Save .md
+        </button>
+      </div>
     </div>
   );
 }
@@ -269,6 +293,80 @@ function Section({ title, defaultOpen = false, children }: { title: string; defa
       {open && <div style={{ paddingLeft: '4px', paddingBottom: '8px' }}>{children}</div>}
     </div>
   );
+}
+
+function summaryToMarkdown(summary: SummaryDocument, content: ExtractedContent | null): string {
+  const lines: string[] = [];
+
+  if (content) {
+    lines.push(`# ${content.title}`, '');
+    const meta: string[] = [];
+    if (content.author || summary.inferredAuthor) meta.push(`**Author:** ${content.author || summary.inferredAuthor}`);
+    if (content.publishDate || summary.inferredPublishDate) meta.push(`**Date:** ${content.publishDate || summary.inferredPublishDate}`);
+    if (content.url) meta.push(`**Source:** ${content.url}`);
+    if (meta.length) lines.push(meta.join(' | '), '');
+  }
+
+  lines.push('## TL;DR', '', summary.tldr, '');
+
+  if (summary.keyTakeaways.length > 0) {
+    lines.push('## Key Takeaways', '');
+    for (const t of summary.keyTakeaways) lines.push(`- ${t}`);
+    lines.push('');
+  }
+
+  lines.push('## Summary', '', summary.summary, '');
+
+  if (summary.notableQuotes.length > 0) {
+    lines.push('## Notable Quotes', '');
+    for (const q of summary.notableQuotes) lines.push(`> "${q}"`, '');
+  }
+
+  if (summary.prosAndCons) {
+    lines.push('## Pros & Cons', '', '**Pros**', '');
+    for (const p of summary.prosAndCons.pros) lines.push(`- ${p}`);
+    lines.push('', '**Cons**', '');
+    for (const c of summary.prosAndCons.cons) lines.push(`- ${c}`);
+    lines.push('');
+  }
+
+  if (summary.commentsHighlights && summary.commentsHighlights.length > 0) {
+    lines.push('## Comment Highlights', '');
+    for (const h of summary.commentsHighlights) lines.push(`- ${h}`);
+    lines.push('');
+  }
+
+  if (summary.conclusion) {
+    lines.push('## Conclusion', '', summary.conclusion, '');
+  }
+
+  if (summary.extraSections) {
+    for (const s of summary.extraSections) {
+      lines.push(`## ${s.title}`, '', s.content, '');
+    }
+  }
+
+  if (summary.relatedTopics.length > 0) {
+    lines.push('## Related Topics', '', summary.relatedTopics.join(', '), '');
+  }
+
+  if (summary.tags.length > 0) {
+    lines.push('---', '', summary.tags.map((t) => `#${t}`).join(' '), '');
+  }
+
+  return lines.join('\n');
+}
+
+function downloadMarkdown(summary: SummaryDocument, content: ExtractedContent | null) {
+  const md = summaryToMarkdown(summary, content);
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const slug = (content?.title || 'summary').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 80);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slug}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function formatDate(dateStr: string): string {
