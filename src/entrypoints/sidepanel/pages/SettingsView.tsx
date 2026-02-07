@@ -429,6 +429,19 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
       <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
         <Button onClick={handleSave} title="Save all settings">Save Settings</Button>
       </div>
+
+      <div style={{
+        marginTop: '24px',
+        paddingTop: '16px',
+        borderTop: '1px solid var(--md-sys-color-outline-variant)',
+        font: 'var(--md-sys-typescale-body-small)',
+        color: 'var(--md-sys-color-on-surface-variant)',
+        textAlign: 'center',
+        lineHeight: 1.6,
+      }}>
+        <div>TL;DR v1.0.0</div>
+        <div>&copy; 2026 AI Tech Knowledge LLC</div>
+      </div>
     </div>
   );
 }
