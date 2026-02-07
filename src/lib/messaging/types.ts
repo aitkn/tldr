@@ -32,6 +32,7 @@ export interface ExtractResultMessage {
   type: 'EXTRACT_RESULT';
   success: boolean;
   data?: ExtractedContent;
+  tabId?: number;
   error?: string;
 }
 

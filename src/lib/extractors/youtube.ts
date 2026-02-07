@@ -52,7 +52,7 @@ export const youtubeExtractor: ContentExtractor = {
     const liveViewCount = doc.querySelector('ytd-video-view-count-renderer span')?.textContent?.trim();
     const viewCount = liveViewCount || extractViewCount(doc);
 
-    const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+    const thumbnailUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
     // Always emit transcript marker — background will fetch via innertube ANDROID API.
     // Video ID comes from the URL (always current, even during SPA navigation).

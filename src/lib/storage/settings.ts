@@ -19,6 +19,7 @@ export async function getSettings(): Promise<Settings> {
       activeProviderId: oldLlm.providerId,
       notion: (stored.notion as Settings['notion']) || DEFAULT_SETTINGS.notion,
       summaryLanguage: (stored.summaryLanguage as string) || DEFAULT_SETTINGS.summaryLanguage,
+      summaryLanguageExcept: (stored.summaryLanguageExcept as string[]) || DEFAULT_SETTINGS.summaryLanguageExcept,
       summaryDetailLevel: (stored.summaryDetailLevel as Settings['summaryDetailLevel']) || DEFAULT_SETTINGS.summaryDetailLevel,
       theme: (stored.theme as Settings['theme']) || DEFAULT_SETTINGS.theme,
     };

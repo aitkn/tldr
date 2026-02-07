@@ -3,6 +3,18 @@ import type { Settings, ThemeMode, ProviderConfig } from '@/lib/storage/types';
 import { PROVIDER_DEFINITIONS } from '@/lib/llm/registry';
 import { Button } from '@/components/Button';
 
+const LANGUAGES = [
+  { code: 'en', name: 'English' },
+  { code: 'es', name: 'Spanish' },
+  { code: 'fr', name: 'French' },
+  { code: 'de', name: 'German' },
+  { code: 'pt', name: 'Portuguese' },
+  { code: 'ru', name: 'Russian' },
+  { code: 'zh', name: 'Chinese' },
+  { code: 'ja', name: 'Japanese' },
+  { code: 'ko', name: 'Korean' },
+];
+
 interface SettingsViewProps {
   settings: Settings;
   onSave: (settings: Settings) => Promise<void>;
@@ -235,6 +247,9 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
           style={{ ...selectStyle, flex: 1 }}
         >
           <option value="">Auto-create new database</option>
+          {local.notion.databaseId && !notionDatabases.some((d) => d.id === local.notion.databaseId) && (
+            <option value={local.notion.databaseId}>{local.notion.databaseName || local.notion.databaseId}</option>
+          )}
           {notionDatabases.map((db) => (
             <option key={db.id} value={db.id}>{db.title}</option>
           ))}
@@ -282,23 +297,53 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
         ))}
       </div>
 
-      <Label>Summary Language</Label>
+      <Label>Translate into</Label>
       <select
         value={local.summaryLanguage}
         onChange={(e) => setLocal({ ...local, summaryLanguage: (e.target as HTMLSelectElement).value })}
         style={selectStyle}
       >
-        <option value="auto">Auto-detect</option>
-        <option value="en">English</option>
-        <option value="es">Spanish</option>
-        <option value="fr">French</option>
-        <option value="de">German</option>
-        <option value="pt">Portuguese</option>
-        <option value="ru">Russian</option>
-        <option value="zh">Chinese</option>
-        <option value="ja">Japanese</option>
-        <option value="ko">Korean</option>
+        <option value="auto">Don't translate</option>
+        {LANGUAGES.map((l) => (
+          <option key={l.code} value={l.code}>{l.name}</option>
+        ))}
       </select>
+
+      {local.summaryLanguage !== 'auto' && <>
+      <Label>Except</Label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+        {LANGUAGES.map((l) => {
+          const active = (local.summaryLanguageExcept || []).includes(l.code);
+          return (
+            <button
+              key={l.code}
+              onClick={() => {
+                const current = local.summaryLanguageExcept || [];
+                const next = active
+                  ? current.filter((c) => c !== l.code)
+                  : [...current, l.code];
+                setLocal({ ...local, summaryLanguageExcept: next });
+              }}
+              style={{
+                padding: '4px 10px',
+                borderRadius: '16px',
+                border: '1px solid',
+                borderColor: active ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-outline-variant)',
+                backgroundColor: active ? 'var(--md-sys-color-primary-container)' : 'var(--md-sys-color-surface-container)',
+                color: active ? 'var(--md-sys-color-on-primary-container)' : 'var(--md-sys-color-on-surface-variant)',
+                font: 'var(--md-sys-typescale-label-small)',
+                cursor: 'pointer',
+              }}
+            >
+              {l.name}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ font: 'var(--md-sys-typescale-body-small)', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '4px' }}>
+        Content in these languages won't be translated
+      </div>
+      </>}
 
       <Label>Summary Detail Level</Label>
       <select
@@ -310,32 +355,6 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
         <option value="standard">Standard</option>
         <option value="detailed">Detailed</option>
       </select>
-
-      <label style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        marginTop: '16px',
-        font: 'var(--md-sys-typescale-body-medium)',
-        color: 'var(--md-sys-color-on-surface)',
-        cursor: 'pointer',
-      }}>
-        <input
-          type="checkbox"
-          checked={local.allowExplicitContent}
-          onChange={(e) => setLocal({ ...local, allowExplicitContent: (e.target as HTMLInputElement).checked })}
-          style={{ width: '18px', height: '18px', accentColor: 'var(--md-sys-color-primary)' }}
-        />
-        Allow explicit/sensitive content
-      </label>
-      <p style={{
-        font: 'var(--md-sys-typescale-body-small)',
-        color: 'var(--md-sys-color-on-surface-variant)',
-        marginTop: '4px',
-        marginLeft: '26px',
-      }}>
-        Summarize adult, medical, or sensitive topics. Summaries remain professional and non-graphic.
-      </p>
 
       <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
         <Button onClick={handleSave}>Save Settings</Button>

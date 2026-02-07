@@ -36,7 +36,7 @@ export function ChatInputBar({ value, onChange, onSubmit, isFirstSubmit, loading
   };
 
   const placeholder = isFirstSubmit
-    ? 'Type instructions and summarize...'
+    ? 'Type optional instructions and summarize...'
     : 'Ask about the summary...';
 
   return (

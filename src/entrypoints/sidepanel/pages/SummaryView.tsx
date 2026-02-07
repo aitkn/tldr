@@ -3,6 +3,11 @@ import type { SummaryDocument } from '@/lib/summarizer/types';
 import type { ExtractedContent } from '@/lib/extractors/types';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
 
+const LANG_LABELS: Record<string, string> = {
+  en: 'EN', es: 'ES', fr: 'FR', de: 'DE',
+  pt: 'PT', ru: 'RU', zh: 'ZH', ja: 'JA', ko: 'KO',
+};
+
 interface SummaryContentProps {
   summary: SummaryDocument;
   content: ExtractedContent | null;
@@ -94,15 +99,21 @@ export function SummaryContent({ summary, content, onExport }: SummaryContentPro
         <Section title="Related Topics">
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
             {summary.relatedTopics.map((topic, i) => (
-              <span key={i} style={{
-                backgroundColor: 'var(--md-sys-color-primary-container)',
-                color: 'var(--md-sys-color-on-primary-container)',
-                padding: '4px 12px',
-                borderRadius: 'var(--md-sys-shape-corner-medium)',
-                font: 'var(--md-sys-typescale-label-small)',
-              }}>
+              <a
+                key={i}
+                href={`https://www.google.com/search?q=${encodeURIComponent(topic)}`}
+                style={{
+                  backgroundColor: 'var(--md-sys-color-primary-container)',
+                  color: 'var(--md-sys-color-on-primary-container)',
+                  padding: '4px 12px',
+                  borderRadius: 'var(--md-sys-shape-corner-medium)',
+                  font: 'var(--md-sys-typescale-label-small)',
+                  textDecoration: 'none',
+                  cursor: 'pointer',
+                }}
+              >
                 {topic}
-              </span>
+              </a>
             ))}
           </div>
         </Section>
@@ -130,11 +141,11 @@ export function SummaryContent({ summary, content, onExport }: SummaryContentPro
         <button
           onClick={onExport}
           style={{
-            padding: '6px 16px',
+            padding: '8px 20px',
             borderRadius: '20px',
             border: 'none',
-            backgroundColor: 'var(--md-sys-color-secondary-container)',
-            color: 'var(--md-sys-color-on-secondary-container)',
+            backgroundColor: 'var(--md-sys-color-primary)',
+            color: 'var(--md-sys-color-on-primary)',
             font: 'var(--md-sys-typescale-label-large)',
             cursor: 'pointer',
           }}
@@ -146,7 +157,7 @@ export function SummaryContent({ summary, content, onExport }: SummaryContentPro
   );
 }
 
-export function MetadataHeader({ content }: { content: ExtractedContent }) {
+export function MetadataHeader({ content, summary }: { content: ExtractedContent; summary?: SummaryDocument }) {
   const badgeColors: Record<string, { bg: string; text: string }> = {
     article: { bg: 'var(--md-sys-color-success-container)', text: 'var(--md-sys-color-on-success-container)' },
     youtube: { bg: 'var(--md-sys-color-error-container)', text: 'var(--md-sys-color-on-error-container)' },
@@ -173,6 +184,18 @@ export function MetadataHeader({ content }: { content: ExtractedContent }) {
             {content.estimatedReadingTime} min read
           </span>
         )}
+        {summary?.sourceLanguage && summary?.summaryLanguage && summary.sourceLanguage !== summary.summaryLanguage && (
+          <span style={{
+            backgroundColor: 'var(--md-sys-color-tertiary-container)',
+            color: 'var(--md-sys-color-on-tertiary-container)',
+            padding: '2px 10px',
+            borderRadius: 'var(--md-sys-shape-corner-small)',
+            font: 'var(--md-sys-typescale-label-small)',
+            fontWeight: 600,
+          }}>
+            {(LANG_LABELS[summary.sourceLanguage] || summary.sourceLanguage.toUpperCase())} → {(LANG_LABELS[summary.summaryLanguage] || summary.summaryLanguage.toUpperCase())}
+          </span>
+        )}
       </div>
 
       {content.type === 'youtube' && content.thumbnailUrl && (
@@ -180,6 +203,15 @@ export function MetadataHeader({ content }: { content: ExtractedContent }) {
           src={content.thumbnailUrl}
           alt={content.title}
           style={{ width: '100%', borderRadius: 'var(--md-sys-shape-corner-medium)', marginBottom: '8px' }}
+          onError={(e) => {
+            const img = e.currentTarget as HTMLImageElement;
+            const hqFallback = content.thumbnailUrl!.replace(/\/[^/]+\.jpg$/, '/hqdefault.jpg');
+            if (img.src !== hqFallback) {
+              img.src = hqFallback;
+            } else {
+              img.style.display = 'none';
+            }
+          }}
         />
       )}
 
@@ -188,8 +220,12 @@ export function MetadataHeader({ content }: { content: ExtractedContent }) {
       </h2>
 
       <div style={{ font: 'var(--md-sys-typescale-body-small)', color: 'var(--md-sys-color-on-surface-variant)', display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
-        {content.author && <span>By {content.author}</span>}
-        {content.publishDate && <span>{formatDate(content.publishDate)}</span>}
+        {(content.author || summary?.inferredAuthor) && (
+          <span>By {content.author || summary?.inferredAuthor}</span>
+        )}
+        {(content.publishDate || summary?.inferredPublishDate) && (
+          <span>{formatDate(content.publishDate || summary?.inferredPublishDate || '')}</span>
+        )}
         {content.duration && <span>{content.duration}</span>}
         {content.viewCount && <span>{content.viewCount} views</span>}
       </div>

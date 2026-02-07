@@ -4,7 +4,7 @@ import preact from '@preact/preset-vite';
 export default defineConfig({
   srcDir: 'src',
   manifest: {
-    name: 'TLDR',
+    name: 'TL;DR',
     description: 'Summarize web pages and YouTube videos with AI',
     icons: {
       16: 'icons/icon-16.png',
@@ -21,21 +21,7 @@ export default defineConfig({
       },
     },
     permissions: ['sidePanel', 'activeTab', 'storage', 'scripting'],
-    host_permissions: [
-      'https://api.openai.com/*',
-      'https://api.anthropic.com/*',
-      'https://generativelanguage.googleapis.com/*',
-      'https://api.x.ai/*',
-      'https://api.deepseek.com/*',
-      'http://localhost:*/*',
-      'http://127.0.0.1:*/*',
-      'https://api.notion.com/*',
-      'https://www.youtube.com/*',
-      'https://*.youtube.com/*',
-      'https://*.googlevideo.com/*',
-      'https://*.google.com/*',
-    ],
-    optional_host_permissions: ['https://*/*', 'http://*/*'],
+    host_permissions: ['<all_urls>'],
   },
   vite: () => ({
     plugins: [preact()],

@@ -1,10 +1,12 @@
 import type { ContentExtractor } from './types';
 import { youtubeExtractor } from './youtube';
+import { gdocsExtractor } from './gdocs';
 import { articleExtractor } from './article';
 import { genericExtractor } from './generic';
 
 const extractors: ContentExtractor[] = [
   youtubeExtractor,
+  gdocsExtractor,
   articleExtractor,
   genericExtractor, // always last — fallback
 ];

@@ -5,10 +5,20 @@ const LANGUAGE_NAMES: Record<string, string> = {
   pt: 'Portuguese', ru: 'Russian', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
 };
 
-export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', language: string): string {
-  const langInstruction = language === 'auto'
-    ? 'Respond in the same language as the source content. If the content is in Russian, respond in Russian. If in English, respond in English. Match the content language exactly.'
-    : `Respond in ${LANGUAGE_NAMES[language] || language}.`;
+export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', language: string, languageExcept: string[] = []): string {
+  const targetLang = LANGUAGE_NAMES[language] || language;
+  const exceptLangs = languageExcept
+    .map((code) => LANGUAGE_NAMES[code] || code)
+    .filter(Boolean);
+
+  let langInstruction: string;
+  if (language === 'auto') {
+    langInstruction = 'Respond in the same language as the source content. Match the content language exactly.';
+  } else if (exceptLangs.length > 0) {
+    langInstruction = `Translate and respond in ${targetLang}. However, if the source content is written in ${exceptLangs.join(' or ')}, respond in the original language instead — do NOT translate it.`;
+  } else {
+    langInstruction = `Respond in ${targetLang}.`;
+  }
 
   const detailInstruction = {
     brief: 'Keep the summary concise — 2-3 sentences for the TLDR, 3-5 key takeaways, and a short summary paragraph.',
@@ -30,7 +40,12 @@ You MUST respond with valid JSON matching this exact structure (no markdown code
   "prosAndCons": { "pros": ["Pro 1", ...], "cons": ["Con 1", ...] },
   "commentsHighlights": ["Notable comment/discussion point 1", ...],
   "relatedTopics": ["Related topic 1", "Related topic 2", ...],
-  "tags": ["tag1", "tag2", ...]
+  "tags": ["tag1", "tag2", ...],
+  "sourceLanguage": "xx",
+  "summaryLanguage": "xx",
+  "translatedTitle": "Title in summary language or null",
+  "inferredAuthor": "Author name or null",
+  "inferredPublishDate": "YYYY-MM-DD or null"
 }
 
 Guidelines:
@@ -39,15 +54,23 @@ Guidelines:
 - "commentsHighlights" is optional — include it only if user comments/discussion is provided. Set to null if not applicable.
 - "relatedTopics" should suggest 3-5 topics someone reading this might also be interested in.
 - "tags" should be 3-7 short, lowercase tags relevant to the content.
-- For "summary", use markdown formatting: headings (##), bullet points, bold, etc.`;
+- "sourceLanguage" must be the ISO 639-1 code of the original content language (e.g. "en", "ru", "fr").
+- "summaryLanguage" must be the ISO 639-1 code of the language you wrote the summary in (e.g. "en", "ru").
+- "translatedTitle" — if sourceLanguage differs from summaryLanguage, provide the title translated to the summary language. Set to null if no translation was needed.
+- "inferredAuthor" — if the author metadata is marked as MISSING, try to infer the author from the content text (byline, signature, mentions, etc.). Set to null if you cannot determine it.
+- "inferredPublishDate" — if the publish date metadata is marked as MISSING, try to infer the date from the content text (date references, timestamps, etc.) in YYYY-MM-DD format. Set to null if you cannot determine it.
+- For "summary", use markdown formatting: headings (##), bullet points, bold, etc.
+- IMPORTANT: The summary must be SHORTER than the original content. For short articles (under 500 words), keep everything very concise — a 1-2 sentence TLDR, 2-4 takeaways, and a brief summary paragraph. Never pad or repeat information across fields. Each field should add unique value, not restate the same points.
+- IMPORTANT: The content may contain mature, explicit, or sensitive topics (medical, psychological, sexual health, etc.). You MUST still summarize it fully and accurately — never refuse to summarize. Keep the summary professional and clinical in tone — do not reproduce explicit language or graphic details. Focus on the key ideas, arguments, and conclusions.
+- IMPORTANT: If the provided text contains no meaningful content — e.g. it is a UI dump, login page, error page, navigation menu, cookie consent, paywall, or app interface markup rather than an actual article or document — respond with ONLY this JSON instead: {"noContent": true, "reason": "Brief explanation of why there is no content to summarize"}. Do NOT attempt to summarize interface elements or boilerplate.`;
 }
 
 export function getSummarizationPrompt(content: ExtractedContent): string {
   let prompt = `Summarize the following ${content.type === 'youtube' ? 'YouTube video' : 'article/page'}.\n\n`;
 
   prompt += `**Title:** ${content.title}\n`;
-  if (content.author) prompt += `**Author:** ${content.author}\n`;
-  if (content.publishDate) prompt += `**Published:** ${content.publishDate}\n`;
+  prompt += `**Author:** ${content.author || 'MISSING — try to infer from content'}\n`;
+  prompt += `**Published:** ${content.publishDate || 'MISSING — try to infer from content'}\n`;
   if (content.duration) prompt += `**Duration:** ${content.duration}\n`;
   if (content.viewCount) prompt += `**Views:** ${content.viewCount}\n`;
   prompt += `**Word count:** ${content.wordCount}\n\n`;

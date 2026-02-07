@@ -54,20 +54,61 @@ async function handleMessage(message: Message): Promise<Message> {
   }
 }
 
+function sendToTab(tabId: number, message: unknown): Promise<unknown> {
+  const chromeTabs = (globalThis as unknown as { chrome: { tabs: typeof chrome.tabs } }).chrome.tabs;
+  return new Promise((resolve, reject) => {
+    chromeTabs.sendMessage(tabId, message, (resp: unknown) => {
+      const chromeRT = (globalThis as unknown as { chrome: { runtime: typeof chrome.runtime } }).chrome.runtime;
+      if (chromeRT.lastError) reject(new Error(chromeRT.lastError.message));
+      else resolve(resp);
+    });
+  });
+}
+
 async function handleExtractContent(): Promise<ExtractResultMessage> {
   try {
     const chromeTabs = (globalThis as unknown as { chrome: { tabs: typeof chrome.tabs } }).chrome.tabs;
     const [tab] = await chromeTabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('No active tab found');
 
-    const response = await new Promise<unknown>((resolve, reject) => {
-      chromeTabs.sendMessage(tab.id!, { type: 'EXTRACT_CONTENT' }, (resp: unknown) => {
-        const chromeRT = (globalThis as unknown as { chrome: { runtime: typeof chrome.runtime } }).chrome.runtime;
-        if (chromeRT.lastError) reject(new Error(chromeRT.lastError.message));
-        else resolve(resp);
+    let response: unknown;
+    try {
+      response = await sendToTab(tab.id, { type: 'EXTRACT_CONTENT' });
+    } catch {
+      // Content script not injected yet (page was open before extension loaded).
+      // Inject it programmatically and retry.
+      const chromeScripting = (globalThis as unknown as { chrome: { scripting: typeof chrome.scripting } }).chrome.scripting;
+      await chromeScripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content-scripts/content.js'],
       });
-    });
-    return response as ExtractResultMessage;
+      response = await sendToTab(tab.id, { type: 'EXTRACT_CONTENT' });
+    }
+    const result = response as ExtractResultMessage;
+    result.tabId = tab.id;
+
+    // Resolve Google Docs export from background (no CORS restrictions here)
+    if (result.success && result.data) {
+      const gdocsMarker = '[GDOCS_EXPORT:';
+      const idx = result.data.content.indexOf(gdocsMarker);
+      if (idx !== -1) {
+        const end = result.data.content.indexOf(']', idx + gdocsMarker.length);
+        if (end !== -1) {
+          const docId = result.data.content.slice(idx + gdocsMarker.length, end);
+          try {
+            const text = await fetchGoogleDocText(docId);
+            result.data.content = text;
+            result.data.wordCount = text.split(/\s+/).filter(Boolean).length;
+            result.data.estimatedReadingTime = Math.ceil(result.data.wordCount / 200);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            result.data.content = `*Could not extract Google Doc content: ${errMsg}*`;
+          }
+        }
+      }
+    }
+
+    return result;
   } catch (err) {
     return {
       type: 'EXTRACT_RESULT',
@@ -83,13 +124,17 @@ async function handleExtractComments(): Promise<Message> {
     const [tab] = await chromeTabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error('No active tab found');
 
-    const response = await new Promise<unknown>((resolve, reject) => {
-      chromeTabs.sendMessage(tab.id!, { type: 'EXTRACT_COMMENTS' }, (resp: unknown) => {
-        const chromeRT = (globalThis as unknown as { chrome: { runtime: typeof chrome.runtime } }).chrome.runtime;
-        if (chromeRT.lastError) reject(new Error(chromeRT.lastError.message));
-        else resolve(resp);
+    let response: unknown;
+    try {
+      response = await sendToTab(tab.id, { type: 'EXTRACT_COMMENTS' });
+    } catch {
+      const chromeScripting = (globalThis as unknown as { chrome: { scripting: typeof chrome.scripting } }).chrome.scripting;
+      await chromeScripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content-scripts/content.js'],
       });
-    });
+      response = await sendToTab(tab.id, { type: 'EXTRACT_COMMENTS' });
+    }
     return response as Message;
   } catch (err) {
     return { type: 'EXTRACT_COMMENTS', success: false, error: err instanceof Error ? err.message : String(err) } as Message;
@@ -109,9 +154,9 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
     const result = await summarize(provider, content, {
       detailLevel: settings.summaryDetailLevel,
       language: settings.summaryLanguage,
+      languageExcept: settings.summaryLanguageExcept,
       contextWindow: llmConfig.contextWindow,
       userInstructions,
-      allowExplicitContent: settings.allowExplicitContent,
     });
 
     return { type: 'SUMMARY_RESULT', success: true, data: result };
@@ -140,8 +185,12 @@ The user has a summary of a ${content.type === 'youtube' ? 'YouTube video' : 'we
 Current summary (JSON):
 ${JSON.stringify(summary, null, 2)}
 
-If the user asks to modify the summary, respond with the complete updated JSON summary.
-If the user asks a question, respond naturally in text.`;
+Response format rules:
+- If you need to UPDATE the summary, include the full updated JSON inside a \`\`\`json fenced code block.
+- If you want to say something to the user (explanation, answer, comment), write it as plain text OUTSIDE the code block.
+- You may include BOTH a text message and a JSON update in the same response, or just one of them.
+- When updating the summary, always return the COMPLETE JSON object (all fields), not just the changed parts.
+- Never wrap plain-text chat in a code block. Only use \`\`\`json for summary updates.`;
 
     const chatMessages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
@@ -279,4 +328,18 @@ async function handleFetchNotionDatabases(): Promise<NotionDatabasesResultMessag
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+async function fetchGoogleDocText(docId: string): Promise<string> {
+  // Background service worker can fetch cross-origin with cookies (host_permissions: <all_urls>)
+  const url = `https://docs.google.com/document/d/${docId}/export?format=txt`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Google Docs export failed (${response.status}). The document may not be accessible.`);
+  }
+  const text = await response.text();
+  if (!text.trim()) {
+    throw new Error('Document appears to be empty.');
+  }
+  return text.trim();
 }

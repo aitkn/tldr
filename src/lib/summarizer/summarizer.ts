@@ -17,13 +17,21 @@ export class LLMTextResponse extends Error {
   }
 }
 
+/** Thrown when the LLM detects no meaningful content to summarize. Not retryable. */
+export class NoContentError extends Error {
+  constructor(public readonly reason: string) {
+    super(reason);
+    this.name = 'NoContentError';
+  }
+}
+
 export interface SummarizeOptions {
   detailLevel: 'brief' | 'standard' | 'detailed';
   language: string;
+  languageExcept?: string[];
   contextWindow: number;
   maxRetries?: number;
   userInstructions?: string;
-  allowExplicitContent?: boolean;
 }
 
 export async function summarize(
@@ -31,11 +39,8 @@ export async function summarize(
   content: ExtractedContent,
   options: SummarizeOptions,
 ): Promise<SummaryDocument> {
-  const { detailLevel, language, contextWindow, maxRetries = 2, userInstructions, allowExplicitContent } = options;
-  let systemPrompt = getSystemPrompt(detailLevel, language);
-  if (allowExplicitContent) {
-    systemPrompt += `\n\nIMPORTANT: The content may contain mature, explicit, or sensitive topics (medical, psychological, sexual health, etc.). You MUST still summarize it fully and accurately. However, keep the summary professional and clinical in tone — do not reproduce explicit language or graphic details. Focus on the key ideas, arguments, and conclusions.`;
-  }
+  const { detailLevel, language, languageExcept, contextWindow, maxRetries = 2, userInstructions } = options;
+  let systemPrompt = getSystemPrompt(detailLevel, language, languageExcept);
   if (userInstructions) {
     systemPrompt += `\n\nAdditional user instructions: ${userInstructions}`;
   }
@@ -53,8 +58,8 @@ export async function summarize(
         return await rollingContextSummarize(provider, content, chunks, systemPrompt);
       }
     } catch (err) {
-      // Don't retry if the LLM gave a text response (refusal, etc.) — it won't change
-      if (err instanceof LLMTextResponse) throw err;
+      // Don't retry if the LLM gave a text response or detected no content — it won't change
+      if (err instanceof LLMTextResponse || err instanceof NoContentError) throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < maxRetries) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
@@ -147,6 +152,9 @@ function parseSummaryResponse(response: string): SummaryDocument {
 
   try {
     const parsed = JSON.parse(cleaned);
+    if (parsed.noContent) {
+      throw new NoContentError(parsed.reason || 'No meaningful content found on this page.');
+    }
     return {
       tldr: parsed.tldr || '',
       keyTakeaways: parsed.keyTakeaways || [],
@@ -157,8 +165,14 @@ function parseSummaryResponse(response: string): SummaryDocument {
       commentsHighlights: parsed.commentsHighlights || undefined,
       relatedTopics: parsed.relatedTopics || [],
       tags: parsed.tags || [],
+      sourceLanguage: parsed.sourceLanguage || undefined,
+      summaryLanguage: parsed.summaryLanguage || undefined,
+      translatedTitle: parsed.translatedTitle || undefined,
+      inferredAuthor: parsed.inferredAuthor || undefined,
+      inferredPublishDate: parsed.inferredPublishDate || undefined,
     };
-  } catch {
+  } catch (err) {
+    if (err instanceof NoContentError) throw err;
     // LLM returned text instead of JSON — surface it as a chat message, not a broken summary
     throw new LLMTextResponse(cleaned);
   }

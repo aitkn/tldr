@@ -30,19 +30,29 @@ interface DisplayMessage {
   content: string;
 }
 
-const EXAMPLE_PROMPTS = [
-  'Summarize briefly',
-  'Focus on key arguments',
-  'Highlight technical details',
-];
 
 export function App() {
   const { mode: themeMode, setMode: setThemeMode } = useTheme();
+
+  // Intercept all link clicks and open in a new window to avoid resetting the side panel
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement).closest('a');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href');
+      if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+      e.preventDefault();
+      window.open(href, '_blank', 'noopener,width=1024,height=768');
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
 
   const [summary, setSummary] = useState<SummaryDocument | null>(null);
   const [content, setContent] = useState<ExtractedContent | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [lockedTabId, setLockedTabId] = useState<number | null>(null);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
@@ -57,13 +67,14 @@ export function App() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Extract content from active tab
+  // Extract content from active tab and lock to it
   const extractContent = useCallback(async () => {
     setExtracting(true);
     try {
       const response = await sendMessage({ type: 'EXTRACT_CONTENT' }) as ExtractResultMessage;
       if (response.success && response.data) {
         setContent(response.data);
+        if (response.tabId) setLockedTabId(response.tabId);
         // Reset summary & chat when page changes
         setSummary(null);
         setChatMessages([]);
@@ -93,32 +104,30 @@ export function App() {
     extractContent();
   }, [extractContent]);
 
-  // Re-extract when active tab changes
+  // Re-extract only when the locked tab navigates or reloads
   useEffect(() => {
+    if (!lockedTabId) return;
     const chromeObj = (globalThis as unknown as { chrome: typeof chrome }).chrome;
     let spaTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const onActivated = () => { extractContent(); };
-    const onUpdated = (_tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+    const onUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (tabId !== lockedTabId) return;
       if (changeInfo.status === 'complete') {
         extractContent();
       }
       // SPA navigation (e.g. YouTube): URL changes without a full reload.
-      // Delay extraction to let the SPA update the DOM.
       if (changeInfo.url) {
         if (spaTimer) clearTimeout(spaTimer);
         spaTimer = setTimeout(() => extractContent(), 1500);
       }
     };
 
-    chromeObj.tabs.onActivated.addListener(onActivated);
     chromeObj.tabs.onUpdated.addListener(onUpdated);
     return () => {
-      chromeObj.tabs.onActivated.removeListener(onActivated);
       chromeObj.tabs.onUpdated.removeListener(onUpdated);
       if (spaTimer) clearTimeout(spaTimer);
     };
-  }, [extractContent]);
+  }, [lockedTabId, extractContent]);
 
   // YouTube lazy-loads comments — retry a few times after extraction
   useEffect(() => {
@@ -250,22 +259,16 @@ export function App() {
         throw new Error(response.error || 'Chat failed');
       }
 
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: response.message! }]);
+      // Parse response: extract ```json block (summary update) and remaining text (chat)
+      const { json, text: chatText } = extractJsonAndText(response.message!);
 
-      // Try to parse as updated summary JSON
-      let cleaned = response.message.trim();
-      if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      if (json) {
+        setSummary(json);
+        setToast({ message: 'Summary updated from chat', type: 'success' });
       }
-      try {
-        const parsed = JSON.parse(cleaned);
-        if (parsed.tldr && parsed.summary) {
-          setSummary(parsed);
-          setToast({ message: 'Summary updated from chat', type: 'success' });
-        }
-      } catch {
-        // Not a JSON update
-      }
+
+      const displayText = chatText || (json ? 'Summary updated.' : response.message!);
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: displayText }]);
     } catch (err) {
       setChatMessages((prev) => [
         ...prev,
@@ -341,6 +344,7 @@ export function App() {
         }}
         themeMode={themeMode}
         onOpenSettings={() => setSettingsOpen(true)}
+        onRefresh={extractContent}
       />
 
       {/* Scrollable content area */}
@@ -360,7 +364,7 @@ export function App() {
               color: 'var(--md-sys-color-on-surface)',
               marginBottom: '8px',
             }}>
-              TLDR
+              TL;DR
             </div>
             <p style={{
               font: 'var(--md-sys-typescale-body-medium)',
@@ -374,31 +378,8 @@ export function App() {
         {/* Page metadata — always visible when content is extracted */}
         {content && (
           <div style={{ padding: '16px' }}>
-            <MetadataHeader content={content} />
+            <MetadataHeader content={content} summary={summary || undefined} />
             <ContentIndicators content={content} />
-          </div>
-        )}
-
-        {/* Prompt chips — only before first interaction */}
-        {content && !summary && !loading && chatMessages.length === 0 && (
-          <div style={{ padding: '0 16px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            {EXAMPLE_PROMPTS.map((prompt) => (
-              <button
-                key={prompt}
-                onClick={() => setInputValue(prompt)}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 'var(--md-sys-shape-corner-extra-large)',
-                  border: '1px solid var(--md-sys-color-outline-variant)',
-                  backgroundColor: 'var(--md-sys-color-surface-container)',
-                  color: 'var(--md-sys-color-on-surface)',
-                  font: 'var(--md-sys-typescale-label-large)',
-                  cursor: 'pointer',
-                }}
-              >
-                {prompt}
-              </button>
-            ))}
           </div>
         )}
 
@@ -475,6 +456,39 @@ export function App() {
   );
 }
 
+function extractJsonAndText(raw: string): { json: SummaryDocument | null; text: string } {
+  const fenceRegex = /```json\s*\n([\s\S]*?)```/;
+  const match = raw.match(fenceRegex);
+
+  if (!match) {
+    // No fenced block — try parsing the entire response as JSON (backward compat)
+    try {
+      let cleaned = raw.trim();
+      if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      const parsed = JSON.parse(cleaned);
+      if (parsed.tldr && parsed.summary) {
+        return { json: parsed, text: '' };
+      }
+    } catch { /* not JSON */ }
+    return { json: null, text: raw };
+  }
+
+  // Extract JSON from the fenced block
+  let json: SummaryDocument | null = null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (parsed.tldr && parsed.summary) {
+      json = parsed;
+    }
+  } catch { /* malformed JSON */ }
+
+  // Everything outside the fenced block is chat text
+  const text = raw.replace(fenceRegex, '').trim();
+  return { json, text };
+}
+
 function ContentIndicators({ content }: { content: ExtractedContent }) {
   const isYouTube = content.type === 'youtube';
   const commentCount = content.comments?.length ?? 0;
@@ -484,22 +498,23 @@ function ContentIndicators({ content }: { content: ExtractedContent }) {
   const hasTranscriptError = content.content.includes('*Transcript could not be loaded:');
   const transcriptLoaded = isYouTube && !hasTranscriptMarker && !hasTranscriptError;
 
+  const commentWords = content.comments
+    ? content.comments.reduce((sum, c) => sum + c.text.split(/\s+/).length, 0)
+    : 0;
+
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
       {isYouTube ? (
         <IndicatorChip
           icon={transcriptLoaded ? '\u2713' : '\u2717'}
-          label={transcriptLoaded ? 'Transcript' : 'No transcript'}
+          label={transcriptLoaded ? `Transcript \u00B7 ${content.wordCount.toLocaleString()} words` : 'No transcript'}
           variant={transcriptLoaded ? 'success' : 'warning'}
         />
       ) : (
         <IndicatorChip icon={'\u2713'} label={`${content.wordCount.toLocaleString()} words`} variant="success" />
       )}
       {commentCount > 0 && (
-        <IndicatorChip icon={String.fromCodePoint(0x1F4AC)} label={`${commentCount} comments`} variant="success" />
-      )}
-      {content.language && content.language.trim() && (
-        <IndicatorChip icon={String.fromCodePoint(0x1F310)} label={content.language} variant="neutral" />
+        <IndicatorChip icon={String.fromCodePoint(0x1F4AC)} label={`${commentCount} comments \u00B7 ${commentWords.toLocaleString()} words`} variant="success" />
       )}
     </div>
   );
@@ -528,10 +543,11 @@ function IndicatorChip({ icon, label, variant }: { icon: string; label: string; 
   );
 }
 
-function Header({ onThemeToggle, themeMode, onOpenSettings }: {
+function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh }: {
   onThemeToggle: () => void;
   themeMode: string;
   onOpenSettings: () => void;
+  onRefresh: () => void;
 }) {
   return (
     <div style={{
@@ -544,9 +560,12 @@ function Header({ onThemeToggle, themeMode, onOpenSettings }: {
       backgroundColor: 'var(--md-sys-color-surface)',
     }}>
       <span style={{ font: 'var(--md-sys-typescale-title-large)', color: 'var(--md-sys-color-on-surface)' }}>
-        TLDR
+        TL;DR
       </span>
       <div style={{ display: 'flex', gap: '4px' }}>
+        <IconButton onClick={onRefresh} label="Refresh — re-link to current tab">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" /></svg>
+        </IconButton>
         <IconButton onClick={onThemeToggle} label={`Theme: ${themeMode}`}>
           {themeMode === 'dark' ? (
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z" /></svg>

@@ -18,9 +18,9 @@ export interface Settings {
   providerConfigs: Record<string, ProviderConfig>;
   activeProviderId: string;
   notion: NotionConfig;
-  summaryLanguage: string; // e.g. 'en', 'auto'
+  summaryLanguage: string; // target language code, e.g. 'en'
+  summaryLanguageExcept: string[]; // don't translate if source is one of these, e.g. ['en', 'ru']
   summaryDetailLevel: 'brief' | 'standard' | 'detailed';
-  allowExplicitContent: boolean;
   theme: ThemeMode;
 }
 
@@ -37,9 +37,9 @@ export const DEFAULT_SETTINGS: Settings = {
   notion: {
     apiKey: '',
   },
-  summaryLanguage: 'auto',
+  summaryLanguage: 'en',
+  summaryLanguageExcept: ['en'],
   summaryDetailLevel: 'standard',
-  allowExplicitContent: false,
   theme: 'system',
 };
 

@@ -89,7 +89,7 @@ export class NotionAdapter implements ExportAdapter {
       method: 'POST',
       body: JSON.stringify({
         parent: { page_id: parentPage.id },
-        title: [{ type: 'text', text: { content: 'TLDR Summaries' } }],
+        title: [{ type: 'text', text: { content: 'TL;DR Summaries' } }],
         properties: {
           Title: { title: {} },
           URL: { url: {} },
@@ -149,7 +149,7 @@ export class NotionAdapter implements ExportAdapter {
 
     const properties: Record<string, unknown> = {
       Title: {
-        title: [{ text: { content: content.title } }],
+        title: [{ text: { content: summary.translatedTitle || content.title } }],
       },
       URL: { url: content.url },
       'Source Type': { select: { name: sourceType } },
@@ -158,15 +158,17 @@ export class NotionAdapter implements ExportAdapter {
       'Reading Time': { number: content.estimatedReadingTime },
     };
 
-    if (content.author) {
+    const author = content.author || summary.inferredAuthor;
+    if (author) {
       properties.Author = {
-        rich_text: [{ text: { content: content.author } }],
+        rich_text: [{ text: { content: author } }],
       };
     }
 
-    if (content.publishDate) {
+    const publishDate = content.publishDate || summary.inferredPublishDate;
+    if (publishDate) {
       try {
-        const date = new Date(content.publishDate);
+        const date = new Date(publishDate);
         if (!isNaN(date.getTime())) {
           properties['Publish Date'] = { date: { start: date.toISOString().split('T')[0] } };
         }
