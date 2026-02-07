@@ -44,7 +44,19 @@ Open the Settings drawer (gear icon) to:
 - Select your AI provider and enter your API key
 - Choose a model
 - Set summary language and detail level
-- Configure Notion export
+- Configure Notion export (see below)
+
+## Notion Integration Setup
+
+1. Go to [notion.so/my-integrations](https://www.notion.so/my-integrations) and click **New integration**
+2. Name it (e.g. "TL;DR") and click **Submit**
+3. Copy the **Internal Integration Secret** (starts with `ntn_`)
+4. Paste it into TL;DR Settings > Notion API Key
+5. Click **Save Settings**, then **Test Connection** to verify
+
+On your first export, TL;DR will automatically create a "TL;DR Summaries" database in your Notion workspace. Subsequent exports will add pages to the same database.
+
+Each exported page includes the summary, key takeaways, notable quotes, tags, source URL, and content metadata.
 
 ## Privacy
 
