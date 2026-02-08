@@ -123,14 +123,27 @@ export class AnthropicProvider implements LLMProvider {
 
 function splitMessages(messages: ChatMessage[]): {
   system: string | undefined;
-  userMessages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  userMessages: Array<{ role: 'user' | 'assistant'; content: unknown }>;
 } {
   let system: string | undefined;
-  const userMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  const userMessages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [];
 
   for (const msg of messages) {
     if (msg.role === 'system') {
       system = (system ? system + '\n' : '') + msg.content;
+    } else if (msg.images?.length) {
+      const parts: Array<Record<string, unknown>> = [{ type: 'text', text: msg.content }];
+      for (const img of msg.images) {
+        if ('url' in img) {
+          parts.push({ type: 'image', source: { type: 'url', url: img.url } });
+        } else {
+          parts.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+          });
+        }
+      }
+      userMessages.push({ role: msg.role as 'user' | 'assistant', content: parts });
     } else {
       userMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
     }

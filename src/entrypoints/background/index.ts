@@ -1,12 +1,27 @@
 import { getSettings, saveSettings } from '@/lib/storage/settings';
 import { getActiveProviderConfig } from '@/lib/storage/types';
-import { createProvider } from '@/lib/llm/registry';
+import { createProvider, getProviderDefinition } from '@/lib/llm/registry';
 import { fetchModels } from '@/lib/llm/models';
-import { summarize } from '@/lib/summarizer/summarizer';
+import { summarize, ImageRequestError } from '@/lib/summarizer/summarizer';
+import { fetchImages } from '@/lib/images/fetcher';
+import { probeVision } from '@/lib/llm/vision-probe';
+import type { FetchedImage } from '@/lib/images/fetcher';
 import type { Message, ExtractResultMessage, SummaryResultMessage, ChatResponseMessage, ConnectionTestResultMessage, SettingsResultMessage, SaveSettingsResultMessage, NotionDatabasesResultMessage, ExportResultMessage, FetchModelsResultMessage } from '@/lib/messaging/types';
-import type { ChatMessage } from '@/lib/llm/types';
+import type { ChatMessage, ImageContent, VisionSupport, LLMProvider } from '@/lib/llm/types';
 import type { SummaryDocument } from '@/lib/summarizer/types';
 import type { ExtractedContent } from '@/lib/extractors/types';
+
+// Persist images across service worker restarts via chrome.storage.session
+const chromeStorage = () => (globalThis as unknown as { chrome: { storage: typeof chrome.storage } }).chrome.storage;
+
+async function cacheImages(images: ImageContent[]): Promise<void> {
+  await chromeStorage().session.set({ _cachedImages: images });
+}
+
+async function getCachedImages(): Promise<ImageContent[]> {
+  const result = await chromeStorage().session.get('_cachedImages');
+  return (result._cachedImages as ImageContent[]) || [];
+}
 
 export default defineBackground(() => {
   const chromeObj = (globalThis as unknown as { chrome: typeof chrome }).chrome;
@@ -29,6 +44,35 @@ export default defineBackground(() => {
   );
 });
 
+async function getModelVision(
+  provider: LLMProvider,
+  providerId: string,
+  model: string,
+): Promise<VisionSupport> {
+  const settings = await getSettings();
+  const key = `${providerId}:${model}`;
+  const cached = settings.modelCapabilities?.[key];
+
+  // Return cached if known and < 30 days old
+  if (cached && cached.vision !== 'unknown' && Date.now() - cached.probedAt < 30 * 86400000) {
+    return cached.vision;
+  }
+
+  const vision = await probeVision(provider);
+
+  // Only cache definitive results
+  if (vision !== 'unknown') {
+    await saveSettings({
+      modelCapabilities: {
+        ...settings.modelCapabilities,
+        [key]: { vision, probedAt: Date.now() },
+      },
+    });
+  }
+
+  return vision;
+}
+
 async function handleMessage(message: Message): Promise<Message> {
   switch (message.type) {
     case 'EXTRACT_CONTENT':
@@ -43,6 +87,8 @@ async function handleMessage(message: Message): Promise<Message> {
       return handleExport(message.adapterId, message.summary, message.content);
     case 'TEST_LLM_CONNECTION':
       return handleTestLLMConnection();
+    case 'PROBE_VISION':
+      return handleProbeVision(message);
     case 'TEST_NOTION_CONNECTION':
       return handleTestNotionConnection();
     case 'GET_SETTINGS':
@@ -58,6 +104,27 @@ async function handleMessage(message: Message): Promise<Message> {
   }
 }
 
+/**
+ * Resolve the target tab: normally the active tab, but if the active tab is
+ * the extension itself (opened as a tab for debugging), fall back to the most
+ * recently accessed non-extension tab in the same window.
+ */
+async function resolveTargetTab(): Promise<chrome.tabs.Tab> {
+  const chromeTabs = (globalThis as unknown as { chrome: { tabs: typeof chrome.tabs } }).chrome.tabs;
+  let [tab] = await chromeTabs.query({ active: true, currentWindow: true });
+
+  if (tab?.url?.startsWith('chrome-extension://')) {
+    const allTabs = await chromeTabs.query({ currentWindow: true });
+    const candidates = allTabs
+      .filter(t => t.id !== tab!.id && !t.url?.startsWith('chrome-extension://'))
+      .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0));
+    if (candidates.length) tab = candidates[0];
+  }
+
+  if (!tab?.id) throw new Error('No active tab found');
+  return tab;
+}
+
 function sendToTab(tabId: number, message: unknown): Promise<unknown> {
   const chromeTabs = (globalThis as unknown as { chrome: { tabs: typeof chrome.tabs } }).chrome.tabs;
   return new Promise((resolve, reject) => {
@@ -71,9 +138,7 @@ function sendToTab(tabId: number, message: unknown): Promise<unknown> {
 
 async function handleExtractContent(): Promise<ExtractResultMessage> {
   try {
-    const chromeTabs = (globalThis as unknown as { chrome: { tabs: typeof chrome.tabs } }).chrome.tabs;
-    const [tab] = await chromeTabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error('No active tab found');
+    const tab = await resolveTargetTab();
 
     let response: unknown;
     try {
@@ -124,9 +189,7 @@ async function handleExtractContent(): Promise<ExtractResultMessage> {
 
 async function handleExtractComments(): Promise<Message> {
   try {
-    const chromeTabs = (globalThis as unknown as { chrome: { tabs: typeof chrome.tabs } }).chrome.tabs;
-    const [tab] = await chromeTabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) throw new Error('No active tab found');
+    const tab = await resolveTargetTab();
 
     let response: unknown;
     try {
@@ -155,15 +218,86 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
     }
 
     const provider = createProvider(llmConfig);
-    const result = await summarize(provider, content, {
-      detailLevel: settings.summaryDetailLevel,
-      language: settings.summaryLanguage,
-      languageExcept: settings.summaryLanguageExcept,
-      contextWindow: llmConfig.contextWindow,
-      userInstructions,
-    });
 
-    return { type: 'SUMMARY_RESULT', success: true, data: result };
+    let imageAnalysisEnabled = false;
+    let modelVision: VisionSupport = 'unknown';
+    if (settings.enableImageAnalysis && content.richImages?.length) {
+      modelVision = await getModelVision(provider, llmConfig.providerId, llmConfig.model);
+      imageAnalysisEnabled = modelVision === 'base64' || modelVision === 'url';
+    }
+
+    let allFetchedImages: FetchedImage[] = [];
+    let imageContents: ImageContent[] | undefined;
+
+    if (imageAnalysisEnabled) {
+      // Send all images as actual image data (inline first, then contextual)
+      const richImages = content.richImages!;
+      const sorted = [
+        ...richImages.filter((i) => i.tier === 'inline'),
+        ...richImages.filter((i) => i.tier === 'contextual'),
+      ];
+
+      if (modelVision === 'url') {
+        // Send URLs directly — no fetch/encode needed
+        imageContents = sorted.slice(0, 5).map((i) => ({ url: i.url }));
+      } else {
+        // Fetch and encode as base64
+        allFetchedImages = await fetchImages(sorted, 5);
+        imageContents = allFetchedImages.map((fi) => ({ base64: fi.base64, mimeType: fi.mimeType }));
+      }
+    }
+
+    // Cache images for chat to reuse (survives service worker restarts)
+    await cacheImages(imageContents || []);
+
+    const MAX_TOTAL_IMAGES = 5;
+
+    try {
+      const result = await summarize(provider, content, {
+        detailLevel: settings.summaryDetailLevel,
+        language: settings.summaryLanguage,
+        languageExcept: settings.summaryLanguageExcept,
+        contextWindow: llmConfig.contextWindow,
+        userInstructions,
+        fetchedImages: allFetchedImages.length > 0 ? allFetchedImages : undefined,
+        imageContents: imageContents?.length ? imageContents : undefined,
+      });
+      return { type: 'SUMMARY_RESULT', success: true, data: result };
+    } catch (err) {
+      // Round-trip: LLM requested additional images
+      if (err instanceof ImageRequestError && imageAnalysisEnabled) {
+        const requestedUrls = err.requestedImages.slice(0, 3);
+        const remaining = MAX_TOTAL_IMAGES - (imageContents?.length ?? 0);
+        if (remaining > 0 && requestedUrls.length > 0) {
+          if (modelVision === 'url') {
+            const additionalUrls = requestedUrls.slice(0, remaining).map((url) => ({ url }));
+            imageContents = [...(imageContents || []), ...additionalUrls];
+          } else {
+            const requestedExtracted = requestedUrls.slice(0, remaining).map((url) => ({
+              url,
+              alt: '',
+              tier: 'contextual' as const,
+            }));
+            const additionalImages = await fetchImages(requestedExtracted, remaining);
+            allFetchedImages = [...allFetchedImages, ...additionalImages];
+            imageContents = allFetchedImages.map((fi) => ({ base64: fi.base64, mimeType: fi.mimeType }));
+          }
+        }
+
+        // Retry summarization with all images — no further round-trips
+        const result = await summarize(provider, content, {
+          detailLevel: settings.summaryDetailLevel,
+          language: settings.summaryLanguage,
+          languageExcept: settings.summaryLanguageExcept,
+          contextWindow: llmConfig.contextWindow,
+          userInstructions,
+          fetchedImages: allFetchedImages.length > 0 ? allFetchedImages : undefined,
+          imageContents: imageContents?.length ? imageContents : undefined,
+        });
+        return { type: 'SUMMARY_RESULT', success: true, data: result };
+      }
+      throw err;
+    }
   } catch (err) {
     return {
       type: 'SUMMARY_RESULT',
@@ -182,8 +316,13 @@ async function handleChatMessage(
     const settings = await getSettings();
     const llmConfig = getActiveProviderConfig(settings);
     const provider = createProvider(llmConfig);
+    const key = `${llmConfig.providerId}:${llmConfig.model}`;
+    const visionCached = settings.modelCapabilities?.[key]?.vision;
+    const hasVisionCapability = visionCached === 'base64' || visionCached === 'url';
+    const cachedImages = (settings.enableImageAnalysis && hasVisionCapability) ? await getCachedImages() : [];
+    const hasImages = cachedImages.length > 0;
 
-    const systemPrompt = `You are a helpful assistant that helps refine and discuss content summaries.
+    let systemPrompt = `You are a helpful assistant that helps refine and discuss content summaries.
 The user has a summary of a ${content.type === 'youtube' ? 'YouTube video' : 'web page'} titled "${content.title}".
 
 Current summary (JSON):
@@ -197,10 +336,22 @@ Response format rules:
 - Never wrap plain-text chat in a code block. Only use \`\`\`json for summary updates.
 - To add custom sections (cheat sheets, tables, extras the user requests), use the "extraSections" array field: [{"title": "Section Name", "content": "markdown content"}]. Content supports full markdown and \`\`\`mermaid diagrams (flowchart, sequence, timeline, etc.).`;
 
+    if (hasImages) {
+      systemPrompt += `\n\nYou have multimodal capabilities — images from the page are attached to this conversation. You can analyze and reference them when answering questions or updating the summary.`;
+    }
+
     const chatMessages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
       ...messages,
     ];
+
+    // Attach cached images to the first user message so the model has visual context
+    if (hasImages) {
+      const firstUserIdx = chatMessages.findIndex((m) => m.role === 'user');
+      if (firstUserIdx >= 0) {
+        chatMessages[firstUserIdx] = { ...chatMessages[firstUserIdx], images: cachedImages };
+      }
+    }
 
     const response = await provider.sendChat(chatMessages);
     return { type: 'CHAT_RESPONSE', success: true, message: response };
@@ -251,7 +402,8 @@ async function handleExport(
 async function handleTestLLMConnection(): Promise<ConnectionTestResultMessage> {
   try {
     const settings = await getSettings();
-    const provider = createProvider(getActiveProviderConfig(settings));
+    const llmConfig = getActiveProviderConfig(settings);
+    const provider = createProvider(llmConfig);
     // Call sendChat directly instead of testConnection() so errors propagate.
     // If sendChat doesn't throw, the connection works (even if response is empty
     // due to e.g. Gemini safety filters on trivial prompts).
@@ -259,7 +411,11 @@ async function handleTestLLMConnection(): Promise<ConnectionTestResultMessage> {
       [{ role: 'user', content: 'Reply with "ok"' }],
       { maxTokens: 10 },
     );
-    return { type: 'CONNECTION_TEST_RESULT', success: true };
+
+    // Probe vision capabilities
+    const vision = await getModelVision(provider, llmConfig.providerId, llmConfig.model);
+
+    return { type: 'CONNECTION_TEST_RESULT', success: true, visionSupport: vision };
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
     // Try to extract a readable message from JSON error responses
@@ -269,6 +425,28 @@ async function handleTestLLMConnection(): Promise<ConnectionTestResultMessage> {
       success: false,
       error: readable,
     };
+  }
+}
+
+async function handleProbeVision(msg: import('@/lib/messaging/types').ProbeVisionMessage): Promise<Message> {
+  try {
+    const settings = await getSettings();
+    // Use provided config (from unsaved UI state) or fall back to saved settings
+    const llmConfig = msg.providerId && msg.model ? {
+      providerId: msg.providerId,
+      apiKey: msg.apiKey || '',
+      model: msg.model,
+      endpoint: msg.endpoint,
+      contextWindow: 100000,
+    } : getActiveProviderConfig(settings);
+    if (!llmConfig.apiKey && llmConfig.providerId !== 'self-hosted') {
+      return { type: 'PROBE_VISION_RESULT', success: false, error: 'No API key' } as Message;
+    }
+    const provider = createProvider(llmConfig);
+    const vision = await getModelVision(provider, llmConfig.providerId, llmConfig.model);
+    return { type: 'PROBE_VISION_RESULT', success: true, vision } as Message;
+  } catch (err) {
+    return { type: 'PROBE_VISION_RESULT', success: false, error: err instanceof Error ? err.message : String(err) } as Message;
   }
 }
 

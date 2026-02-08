@@ -1,6 +1,6 @@
 import type { ExtractedContent } from '../extractors/types';
 import type { SummaryDocument } from '../summarizer/types';
-import type { ChatMessage, ModelInfo } from '../llm/types';
+import type { ChatMessage, ModelInfo, VisionSupport } from '../llm/types';
 import type { Settings } from '../storage/types';
 
 export type MessageType =
@@ -24,7 +24,11 @@ export type MessageType =
   | 'FETCH_NOTION_DATABASES'
   | 'NOTION_DATABASES_RESULT'
   | 'FETCH_MODELS'
-  | 'FETCH_MODELS_RESULT';
+  | 'FETCH_MODELS_RESULT'
+  | 'FETCH_IMAGES'
+  | 'FETCH_IMAGES_RESULT'
+  | 'PROBE_VISION'
+  | 'PROBE_VISION_RESULT';
 
 export interface ExtractContentMessage {
   type: 'EXTRACT_CONTENT';
@@ -101,6 +105,7 @@ export interface ConnectionTestResultMessage {
   type: 'CONNECTION_TEST_RESULT';
   success: boolean;
   error?: string;
+  visionSupport?: VisionSupport;
 }
 
 export interface GetSettingsMessage {
@@ -147,6 +152,32 @@ export interface FetchModelsResultMessage {
   error?: string;
 }
 
+export interface FetchImagesMessage {
+  type: 'FETCH_IMAGES';
+  imageUrls: string[];
+}
+
+export interface FetchImagesResultMessage {
+  type: 'FETCH_IMAGES_RESULT';
+  success: boolean;
+  error?: string;
+}
+
+export interface ProbeVisionMessage {
+  type: 'PROBE_VISION';
+  providerId?: string;
+  apiKey?: string;
+  model?: string;
+  endpoint?: string;
+}
+
+export interface ProbeVisionResultMessage {
+  type: 'PROBE_VISION_RESULT';
+  success: boolean;
+  vision?: VisionSupport;
+  error?: string;
+}
+
 export type Message =
   | ExtractContentMessage
   | ExtractResultMessage
@@ -168,4 +199,8 @@ export type Message =
   | FetchNotionDatabasesMessage
   | NotionDatabasesResultMessage
   | FetchModelsMessage
-  | FetchModelsResultMessage;
+  | FetchModelsResultMessage
+  | FetchImagesMessage
+  | FetchImagesResultMessage
+  | ProbeVisionMessage
+  | ProbeVisionResultMessage;

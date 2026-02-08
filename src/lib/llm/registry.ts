@@ -10,6 +10,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultEndpoint: 'https://api.openai.com',
     defaultContextWindow: 128000,
     apiKeyUrl: 'https://platform.openai.com/api-keys',
+    supportsVision: true,
   },
   {
     id: 'anthropic',
@@ -17,6 +18,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultEndpoint: 'https://api.anthropic.com',
     defaultContextWindow: 200000,
     apiKeyUrl: 'https://console.anthropic.com/settings/keys',
+    supportsVision: true,
   },
   {
     id: 'google',
@@ -24,6 +26,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultEndpoint: 'https://generativelanguage.googleapis.com',
     defaultContextWindow: 1000000,
     apiKeyUrl: 'https://aistudio.google.com/apikey',
+    supportsVision: true,
   },
   {
     id: 'xai',
@@ -31,6 +34,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultEndpoint: 'https://api.x.ai',
     defaultContextWindow: 128000,
     apiKeyUrl: 'https://console.x.ai/',
+    supportsVision: true,
   },
   {
     id: 'deepseek',

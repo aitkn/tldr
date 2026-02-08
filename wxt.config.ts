@@ -20,7 +20,7 @@ export default defineConfig({
         128: 'icons/icon-128.png',
       },
     },
-    permissions: ['sidePanel', 'activeTab', 'storage', 'scripting'],
+    permissions: ['sidePanel', 'activeTab', 'storage', 'scripting', 'tabs'],
     host_permissions: ['<all_urls>'],
   },
   vite: () => ({

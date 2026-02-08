@@ -1,5 +1,6 @@
 import { Readability, isProbablyReaderable } from '@mozilla/readability';
 import type { ContentExtractor, ExtractedContent } from './types';
+import { extractRichImages } from './image-utils';
 
 export const articleExtractor: ContentExtractor = {
   canExtract(_url: string, doc: Document): boolean {
@@ -40,6 +41,7 @@ export const articleExtractor: ContentExtractor = {
     const images = Array.from(tempDiv.querySelectorAll('img'))
       .map((img) => img.src)
       .filter(Boolean);
+    const richImages = extractRichImages(tempDiv);
 
     return {
       type: 'article',
@@ -52,6 +54,7 @@ export const articleExtractor: ContentExtractor = {
       wordCount,
       estimatedReadingTime: Math.ceil(wordCount / 200),
       images,
+      richImages,
     };
   },
 };
@@ -129,7 +132,9 @@ function htmlToMarkdown(html: string): string {
       case 'hr':
         return '\n---\n';
       case 'figure':
+        return `\n${children}\n`;
       case 'figcaption':
+        return `\n*${children.trim()}*\n`;
       case 'div':
       case 'section':
       case 'article':

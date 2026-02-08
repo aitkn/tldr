@@ -1,4 +1,5 @@
 import type { ContentExtractor, ExtractedContent } from './types';
+import { extractRichImages } from './image-utils';
 
 export const genericExtractor: ContentExtractor = {
   canExtract(): boolean {
@@ -23,8 +24,12 @@ export const genericExtractor: ContentExtractor = {
     const language = doc.documentElement.lang || undefined;
 
     // Extract main content area
-    const content = extractMainContent(doc, description);
+    const contentRoot = findContentRoot(doc);
+    const content = contentRoot
+      ? cleanText(contentRoot.textContent || '')
+      : (description || 'No readable content found on this page.');
     const wordCount = content.split(/\s+/).filter(Boolean).length;
+    const richImages = contentRoot ? extractRichImages(contentRoot) : [];
 
     return {
       type: 'generic',
@@ -35,12 +40,12 @@ export const genericExtractor: ContentExtractor = {
       content,
       wordCount,
       estimatedReadingTime: Math.ceil(wordCount / 200),
+      richImages,
     };
   },
 };
 
-function extractMainContent(doc: Document, description: string): string {
-  // Try common main content selectors
+function findContentRoot(doc: Document): HTMLElement | null {
   const mainSelectors = [
     'main',
     'article',
@@ -54,25 +59,21 @@ function extractMainContent(doc: Document, description: string): string {
   ];
 
   for (const selector of mainSelectors) {
-    const el = doc.querySelector(selector);
+    const el = doc.querySelector(selector) as HTMLElement | null;
     if (el) {
       const text = cleanText(el.textContent || '');
-      if (text.length > 100) {
-        return text;
-      }
+      if (text.length > 100) return el;
     }
   }
 
-  // Fallback: grab body text, removing nav/footer/header
-  const body = doc.body.cloneNode(true) as HTMLElement;
+  // Fallback: grab body, removing nav/footer/header
+  const body = doc.body?.cloneNode(true) as HTMLElement | null;
+  if (!body) return null;
   const removable = body.querySelectorAll('nav, footer, header, script, style, [role="navigation"], [role="banner"], [role="contentinfo"], aside');
   removable.forEach((el) => el.remove());
 
   const text = cleanText(body.textContent || '');
-  if (text.length > 50) return text;
-
-  // Last resort: use description
-  return description || 'No readable content found on this page.';
+  return text.length > 50 ? body : null;
 }
 
 function cleanText(text: string): string {

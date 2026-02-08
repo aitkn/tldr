@@ -23,6 +23,16 @@ export interface ExtractedContent {
 
   // Images
   images?: string[];
+  richImages?: ExtractedImage[];
+}
+
+export interface ExtractedImage {
+  url: string;
+  alt: string;
+  caption?: string;
+  tier: 'inline' | 'contextual';
+  width?: number;
+  height?: number;
 }
 
 export interface ExtractedComment {

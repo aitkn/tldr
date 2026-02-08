@@ -1,6 +1,7 @@
-import type { LLMProvider, ChatMessage } from '../llm/types';
+import type { LLMProvider, ChatMessage, ImageContent } from '../llm/types';
 import type { ExtractedContent } from '../extractors/types';
 import type { SummaryDocument } from './types';
+import type { FetchedImage } from '../images/fetcher';
 import { chunkContent, type ChunkOptions } from './chunker';
 import {
   getSystemPrompt,
@@ -25,6 +26,14 @@ export class NoContentError extends Error {
   }
 }
 
+/** Thrown when the LLM requests specific images for analysis. Caught by background orchestrator. */
+export class ImageRequestError extends Error {
+  constructor(public readonly requestedImages: string[]) {
+    super('LLM requested additional images');
+    this.name = 'ImageRequestError';
+  }
+}
+
 export interface SummarizeOptions {
   detailLevel: 'brief' | 'standard' | 'detailed';
   language: string;
@@ -32,6 +41,8 @@ export interface SummarizeOptions {
   contextWindow: number;
   maxRetries?: number;
   userInstructions?: string;
+  fetchedImages?: FetchedImage[];
+  imageContents?: ImageContent[]; // URL mode — takes precedence over fetchedImages
 }
 
 export async function summarize(
@@ -39,8 +50,14 @@ export async function summarize(
   content: ExtractedContent,
   options: SummarizeOptions,
 ): Promise<SummaryDocument> {
-  const { detailLevel, language, languageExcept, contextWindow, maxRetries = 2, userInstructions } = options;
-  let systemPrompt = getSystemPrompt(detailLevel, language, languageExcept);
+  const { detailLevel, language, languageExcept, contextWindow, maxRetries = 2, userInstructions, fetchedImages, imageContents: directImageContents } = options;
+  // Prefer pre-built imageContents (URL mode) over fetchedImages
+  const imageContents: ImageContent[] | undefined = directImageContents || fetchedImages?.map((fi) => ({
+    base64: fi.base64,
+    mimeType: fi.mimeType,
+  }));
+  const hasImages = !!(imageContents?.length);
+  let systemPrompt = getSystemPrompt(detailLevel, language, languageExcept, hasImages);
   if (userInstructions) {
     systemPrompt += `\n\nAdditional user instructions: ${userInstructions}`;
   }
@@ -53,13 +70,13 @@ export async function summarize(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       if (chunks.length === 1) {
-        return await oneShotSummarize(provider, content, systemPrompt);
+        return await oneShotSummarize(provider, content, systemPrompt, imageContents);
       } else {
-        return await rollingContextSummarize(provider, content, chunks, systemPrompt);
+        return await rollingContextSummarize(provider, content, chunks, systemPrompt, imageContents);
       }
     } catch (err) {
-      // Don't retry if the LLM gave a text response or detected no content — it won't change
-      if (err instanceof LLMTextResponse || err instanceof NoContentError) throw err;
+      // Don't retry if the LLM gave a text response, detected no content, or requested images — it won't change
+      if (err instanceof LLMTextResponse || err instanceof NoContentError || err instanceof ImageRequestError) throw err;
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < maxRetries) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
@@ -74,16 +91,17 @@ async function oneShotSummarize(
   provider: LLMProvider,
   content: ExtractedContent,
   systemPrompt: string,
+  images?: ImageContent[],
 ): Promise<SummaryDocument> {
   const userPrompt = getSummarizationPrompt(content);
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
+    { role: 'user', content: userPrompt, images },
   ];
 
   const response = await provider.sendChat(messages, { maxTokens: 4096 });
-  return parseSummaryResponse(response);
+  return parseSummaryResponse(response, !!images?.length);
 }
 
 async function rollingContextSummarize(
@@ -91,6 +109,7 @@ async function rollingContextSummarize(
   content: ExtractedContent,
   chunks: string[],
   systemPrompt: string,
+  images?: ImageContent[],
 ): Promise<SummaryDocument> {
   let rollingSummary = '';
 
@@ -125,15 +144,16 @@ async function rollingContextSummarize(
       }
     }
 
+    // Attach images only to the first chunk (token budget)
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
+      { role: 'user', content: userPrompt, images: i === 0 ? images : undefined },
     ];
 
     const response = await provider.sendChat(messages, { maxTokens: 4096 });
 
     if (isLast) {
-      return parseSummaryResponse(response);
+      return parseSummaryResponse(response, !!(i === 0 && images?.length));
     }
 
     // For intermediate chunks, use the response as rolling context
@@ -143,7 +163,7 @@ async function rollingContextSummarize(
   throw new Error('No chunks to process');
 }
 
-function parseSummaryResponse(response: string): SummaryDocument {
+function parseSummaryResponse(response: string, imageAnalysisEnabled = false): SummaryDocument {
   // Strip markdown code fences if present
   let cleaned = response.trim();
   if (cleaned.startsWith('```')) {
@@ -154,6 +174,10 @@ function parseSummaryResponse(response: string): SummaryDocument {
     const parsed = JSON.parse(cleaned);
     if (parsed.noContent) {
       throw new NoContentError(parsed.reason || 'No meaningful content found on this page.');
+    }
+    // Check if LLM is requesting additional images for analysis
+    if (imageAnalysisEnabled && Array.isArray(parsed.requestedImages) && parsed.requestedImages.length > 0) {
+      throw new ImageRequestError(parsed.requestedImages);
     }
     const pc = parsed.prosAndCons;
     return {

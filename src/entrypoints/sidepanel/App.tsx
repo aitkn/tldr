@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import type { SummaryDocument } from '@/lib/summarizer/types';
 import type { ExtractedContent } from '@/lib/extractors/types';
-import type { ChatMessage } from '@/lib/llm/types';
+import type { ChatMessage, VisionSupport } from '@/lib/llm/types';
 import type { Settings } from '@/lib/storage/types';
+import { getActiveProviderConfig } from '@/lib/storage/types';
 import { DEFAULT_SETTINGS } from '@/lib/storage/types';
 import { sendMessage } from '@/lib/messaging/bridge';
 import type {
@@ -15,6 +16,7 @@ import type {
   NotionDatabasesResultMessage,
   ExportResultMessage,
   FetchModelsResultMessage,
+  ProbeVisionResultMessage,
 } from '@/lib/messaging/types';
 import type { ModelInfo } from '@/lib/llm/types';
 import { SummaryContent, MetadataHeader } from './pages/SummaryView';
@@ -391,9 +393,22 @@ export function App() {
     }
   }, []);
 
-  const handleTestLLM = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
+  const handleTestLLM = useCallback(async (): Promise<{ success: boolean; error?: string; visionSupport?: VisionSupport }> => {
     const response = await sendMessage({ type: 'TEST_LLM_CONNECTION' }) as ConnectionTestResultMessage;
-    return { success: response.success, error: response.error };
+    // Reload settings to pick up cached vision probe result
+    if (response.visionSupport) {
+      const settingsResp = await sendMessage({ type: 'GET_SETTINGS' }) as SettingsResultMessage;
+      if (settingsResp.settings) setSettings(settingsResp.settings);
+    }
+    return { success: response.success, error: response.error, visionSupport: response.visionSupport };
+  }, []);
+
+  const handleProbeVision = useCallback(async (providerId?: string, apiKey?: string, model?: string, endpoint?: string): Promise<VisionSupport | undefined> => {
+    const response = await sendMessage({ type: 'PROBE_VISION', providerId, apiKey, model, endpoint }) as ProbeVisionResultMessage;
+    if (response.success && response.vision) {
+      return response.vision;
+    }
+    return undefined;
   }, []);
 
   const handleTestNotion = useCallback(async (): Promise<boolean> => {
@@ -462,7 +477,7 @@ export function App() {
         {content && (
           <div style={{ padding: '16px' }}>
             <MetadataHeader content={content} summary={summary || undefined} />
-            <ContentIndicators content={content} />
+            <ContentIndicators content={content} settings={settings} />
           </div>
         )}
 
@@ -529,6 +544,7 @@ export function App() {
           onTestNotion={handleTestNotion}
           onFetchNotionDatabases={handleFetchNotionDatabases}
           onFetchModels={handleFetchModels}
+          onProbeVision={handleProbeVision}
           onThemeChange={handleThemeChange}
           currentTheme={themeMode}
         />
@@ -624,7 +640,7 @@ function extractJsonAndText(raw: string): { json: SummaryDocument | null; text: 
   return { json: null, text: raw };
 }
 
-function ContentIndicators({ content }: { content: ExtractedContent }) {
+function ContentIndicators({ content, settings }: { content: ExtractedContent; settings: Settings }) {
   const isYouTube = content.type === 'youtube';
   const commentCount = content.comments?.length ?? 0;
 
@@ -636,6 +652,19 @@ function ContentIndicators({ content }: { content: ExtractedContent }) {
   const commentWords = content.comments
     ? content.comments.reduce((sum, c) => sum + c.text.split(/\s+/).length, 0)
     : 0;
+
+  const imageCount = content.richImages?.length ?? 0;
+
+  // Compute image analysis status based on model capabilities
+  let willAnalyze = false;
+  let urlMode = false;
+  if (imageCount > 0) {
+    const activeConfig = getActiveProviderConfig(settings);
+    const key = `${settings.activeProviderId}:${activeConfig.model}`;
+    const vision = settings.modelCapabilities?.[key]?.vision;
+    willAnalyze = !!(settings.enableImageAnalysis && (vision === 'base64' || vision === 'url'));
+    urlMode = vision === 'url';
+  }
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
@@ -651,11 +680,13 @@ function ContentIndicators({ content }: { content: ExtractedContent }) {
       {commentCount > 0 && (
         <IndicatorChip icon={String.fromCodePoint(0x1F4AC)} label={`${commentCount} comments \u00B7 ${commentWords.toLocaleString()} words`} variant="success" />
       )}
-      {(content.richImages?.length ?? 0) > 0 && (
+      {imageCount > 0 && (
         <IndicatorChip
           icon={String.fromCodePoint(0x1F5BC)}
-          label={`${content.richImages!.length} image${content.richImages!.length > 1 ? 's' : ''}`}
-          variant="neutral"
+          label={willAnalyze
+            ? `${imageCount} image${imageCount > 1 ? 's' : ''} \u2014 will analyze${urlMode ? ' (URLs)' : ''}`
+            : `${imageCount} image${imageCount > 1 ? 's' : ''}`}
+          variant={willAnalyze ? 'success' : 'neutral'}
         />
       )}
     </div>

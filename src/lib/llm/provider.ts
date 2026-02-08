@@ -26,11 +26,29 @@ export class OpenAICompatibleProvider implements LLMProvider {
       : { max_tokens: maxTokens };
   }
 
+  private formatMessage(m: ChatMessage): Record<string, unknown> {
+    if (m.images?.length) {
+      const parts: Array<Record<string, unknown>> = [{ type: 'text', text: m.content }];
+      for (const img of m.images) {
+        if ('url' in img) {
+          parts.push({ type: 'image_url', image_url: { url: img.url } });
+        } else {
+          parts.push({
+            type: 'image_url',
+            image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+          });
+        }
+      }
+      return { role: m.role, content: parts };
+    }
+    return { role: m.role, content: m.content };
+  }
+
   async sendChat(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
     const url = `${this.endpoint}/v1/chat/completions`;
     const body = {
       model: this.config.model,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => this.formatMessage(m)),
       temperature: options?.temperature ?? 0.3,
       ...this.tokenLimitParam(options?.maxTokens ?? 4096),
       stream: false,
@@ -71,7 +89,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const url = `${this.endpoint}/v1/chat/completions`;
     const body = {
       model: this.config.model,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      messages: messages.map((m) => this.formatMessage(m)),
       temperature: options?.temperature ?? 0.3,
       ...this.tokenLimitParam(options?.maxTokens ?? 4096),
       stream: true,

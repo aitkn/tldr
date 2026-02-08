@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import type { Settings, ThemeMode, ProviderConfig } from '@/lib/storage/types';
-import type { ModelInfo } from '@/lib/llm/types';
+import type { ModelInfo, VisionSupport } from '@/lib/llm/types';
 import { PROVIDER_DEFINITIONS } from '@/lib/llm/registry';
 import { Button } from '@/components/Button';
 
@@ -19,15 +19,16 @@ const LANGUAGES = [
 interface SettingsViewProps {
   settings: Settings;
   onSave: (settings: Settings) => Promise<void>;
-  onTestLLM: () => Promise<{ success: boolean; error?: string }>;
+  onTestLLM: () => Promise<{ success: boolean; error?: string; visionSupport?: VisionSupport }>;
   onTestNotion: () => Promise<boolean>;
   onFetchNotionDatabases: () => Promise<Array<{ id: string; title: string }>>;
   onFetchModels: (providerId: string, apiKey: string, endpoint?: string) => Promise<ModelInfo[]>;
+  onProbeVision: (providerId?: string, apiKey?: string, model?: string, endpoint?: string) => Promise<VisionSupport | undefined>;
   onThemeChange: (mode: ThemeMode) => void;
   currentTheme: ThemeMode;
 }
 
-export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetchNotionDatabases, onFetchModels, onThemeChange, currentTheme }: SettingsViewProps) {
+export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetchNotionDatabases, onFetchModels, onProbeVision, onThemeChange, currentTheme }: SettingsViewProps) {
   const [local, setLocal] = useState<Settings>(settings);
   const [testingLLM, setTestingLLM] = useState(false);
   const [testingNotion, setTestingNotion] = useState(false);
@@ -41,6 +42,7 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
   const [fetchedModels, setFetchedModels] = useState<Record<string, ModelInfo[]>>({});
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [probingVision, setProbingVision] = useState(false);
 
   useEffect(() => {
     setLocal(settings);
@@ -59,6 +61,29 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
   };
   const currentProviderDef = PROVIDER_DEFINITIONS.find((p) => p.id === currentProviderId);
   const currentModels = fetchedModels[currentProviderId] || [];
+  const visionKey = `${currentProviderId}:${currentConfig.model}`;
+  const visionCapability: VisionSupport = local.modelCapabilities?.[visionKey]?.vision || 'unknown';
+
+  // Auto-probe vision when model changes and capability is unknown
+  useEffect(() => {
+    if (!currentConfig.model || !currentConfig.apiKey && currentProviderId !== 'self-hosted') return;
+    if (visionCapability !== 'unknown') return;
+    let cancelled = false;
+    setProbingVision(true);
+    onProbeVision(currentProviderId, currentConfig.apiKey, currentConfig.model, currentConfig.endpoint).then((vision) => {
+      if (cancelled || !vision) return;
+      setLocal((prev) => ({
+        ...prev,
+        modelCapabilities: {
+          ...prev.modelCapabilities,
+          [visionKey]: { vision, probedAt: Date.now() },
+        },
+      }));
+    }).finally(() => {
+      if (!cancelled) setProbingVision(false);
+    });
+    return () => { cancelled = true; };
+  }, [visionKey]);
 
   const updateProviderConfig = (patch: Partial<ProviderConfig>) => {
     setLocal({
@@ -135,6 +160,16 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
       const result = await onTestLLM();
       setLlmStatus(result.success ? 'success' : 'error');
       if (!result.success && result.error) setLlmError(result.error);
+      // Update vision badge immediately from test result
+      if (result.visionSupport) {
+        setLocal((prev) => ({
+          ...prev,
+          modelCapabilities: {
+            ...prev.modelCapabilities,
+            [visionKey]: { vision: result.visionSupport!, probedAt: Date.now() },
+          },
+        }));
+      }
     } catch (err) {
       setLlmStatus('error');
       setLlmError(err instanceof Error ? err.message : String(err));
@@ -248,6 +283,13 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
         </div>
       )}
 
+      {/* Vision capability badge */}
+      {currentConfig.model && (
+        <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <VisionBadge vision={visionCapability} probing={probingVision} />
+        </div>
+      )}
+
       {(!currentModels.some((m) => m.id === currentConfig.model) && currentConfig.model) && (
         <>
           <Label>Custom Model ID</Label>
@@ -277,6 +319,31 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
         onInput={(e) => updateProviderConfig({ contextWindow: parseInt((e.target as HTMLInputElement).value) || 100000 })}
         style={inputStyle}
       />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px' }}>
+        <input
+          type="checkbox"
+          id="enableImageAnalysis"
+          checked={local.enableImageAnalysis || false}
+          onChange={(e) => setLocal({ ...local, enableImageAnalysis: (e.target as HTMLInputElement).checked })}
+          style={{ margin: 0 }}
+        />
+        <label
+          htmlFor="enableImageAnalysis"
+          style={{ font: 'var(--md-sys-typescale-label-medium)', color: 'var(--md-sys-color-on-surface)', cursor: 'pointer' }}
+        >
+          Analyze page images
+        </label>
+      </div>
+      <div style={{ font: 'var(--md-sys-typescale-body-small)', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '2px', marginLeft: '26px' }}>
+        {visionCapability === 'none'
+          ? 'This model does not support image analysis'
+          : visionCapability === 'base64'
+          ? 'Sends images to the LLM for analysis (increases token usage)'
+          : visionCapability === 'url'
+          ? 'Sends image URLs to the LLM (minimal extra token usage)'
+          : 'Run Test Connection to check if this model supports images'}
+      </div>
 
       <div style={{ display: 'flex', gap: '8px', marginTop: '12px', alignItems: 'center' }}>
         <Button onClick={handleTestLLM} loading={testingLLM} size="sm" variant="secondary" title="Test LLM connection">
@@ -513,6 +580,42 @@ const inputStyle: Record<string, string> = {
   backgroundColor: 'var(--md-sys-color-surface-container-highest)',
   color: 'var(--md-sys-color-on-surface)',
 };
+
+function VisionBadge({ vision, probing }: { vision: VisionSupport; probing: boolean }) {
+  if (probing) {
+    return (
+      <span style={{
+        font: 'var(--md-sys-typescale-label-small)',
+        color: 'var(--md-sys-color-on-surface-variant)',
+        padding: '2px 8px',
+        borderRadius: '10px',
+        backgroundColor: 'var(--md-sys-color-surface-container-high)',
+      }}>
+        Checking vision...
+      </span>
+    );
+  }
+
+  const config: Record<VisionSupport, { label: string; color: string; bg: string }> = {
+    unknown: { label: '? vision', color: 'var(--md-sys-color-on-surface-variant)', bg: 'var(--md-sys-color-surface-container-high)' },
+    none: { label: '\u2717 no vision', color: 'var(--md-sys-color-error)', bg: 'var(--md-sys-color-error-container, #fce4ec)' },
+    base64: { label: '\u2713 vision', color: 'var(--md-sys-color-success, #065f46)', bg: 'var(--md-sys-color-success-container, #d1fae5)' },
+    url: { label: '\u2713 vision (+url)', color: 'var(--md-sys-color-success, #065f46)', bg: 'var(--md-sys-color-success-container, #d1fae5)' },
+  };
+
+  const c = config[vision];
+  return (
+    <span style={{
+      font: 'var(--md-sys-typescale-label-small)',
+      color: c.color,
+      padding: '2px 8px',
+      borderRadius: '10px',
+      backgroundColor: c.bg,
+    }}>
+      {c.label}
+    </span>
+  );
+}
 
 const selectStyle: Record<string, string> = {
   ...inputStyle,

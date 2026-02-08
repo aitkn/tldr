@@ -1,4 +1,4 @@
-import type { ModelInfo } from '../llm/types';
+import type { ModelInfo, ModelCapabilities } from '../llm/types';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -25,6 +25,8 @@ export interface Settings {
   summaryDetailLevel: 'brief' | 'standard' | 'detailed';
   theme: ThemeMode;
   cachedModels?: Record<string, ModelInfo[]>;
+  modelCapabilities?: Record<string, ModelCapabilities>;
+  enableImageAnalysis?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

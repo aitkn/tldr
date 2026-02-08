@@ -131,10 +131,10 @@ export class GoogleProvider implements LLMProvider {
 
 function convertMessages(messages: ChatMessage[]): {
   systemInstruction: { parts: Array<{ text: string }> } | undefined;
-  contents: Array<{ role: string; parts: Array<{ text: string }> }>;
+  contents: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
 } {
   let systemInstruction: { parts: Array<{ text: string }> } | undefined;
-  const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+  const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
 
   for (const msg of messages) {
     if (msg.role === 'system') {
@@ -144,9 +144,20 @@ function convertMessages(messages: ChatMessage[]): {
         systemInstruction.parts.push({ text: msg.content });
       }
     } else {
+      const parts: Array<Record<string, unknown>> = [{ text: msg.content }];
+      if (msg.images?.length) {
+        for (const img of msg.images) {
+          if ('url' in img) {
+            // Google doesn't support arbitrary URLs — skip URL images for Gemini
+            // (This path shouldn't be reached because probe will return 'base64' for Gemini)
+          } else {
+            parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+          }
+        }
+      }
       contents.push({
         role: msg.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: msg.content }],
+        parts,
       });
     }
   }
