@@ -515,7 +515,7 @@ export function App() {
               color: 'var(--md-sys-color-on-surface)',
               marginBottom: '8px',
             }}>
-              TL;DR
+              <span title="Too Long; Didn't Read">TL;DR</span>
             </div>
             <p style={{
               font: 'var(--md-sys-typescale-body-medium)',
@@ -558,7 +558,7 @@ export function App() {
               color: 'var(--md-sys-color-on-surface)',
               marginBottom: '8px',
             }}>
-              Welcome to TL;DR!
+              Welcome to <span title="Too Long; Didn't Read">TL;DR</span>!
             </div>
             <p style={{
               font: 'var(--md-sys-typescale-body-medium)',
@@ -872,7 +872,7 @@ function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh }: {
       position: 'relative',
       boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
     }}>
-      <span style={{ font: 'var(--md-sys-typescale-title-large)', color: 'var(--md-sys-color-on-surface)' }}>
+      <span title="Too Long; Didn't Read" style={{ font: 'var(--md-sys-typescale-title-large)', color: 'var(--md-sys-color-on-surface)' }}>
         TL;DR
       </span>
       <div style={{ display: 'flex', gap: '4px' }}>
