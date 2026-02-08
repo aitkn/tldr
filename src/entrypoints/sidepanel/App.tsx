@@ -5,6 +5,7 @@ import type { ChatMessage, VisionSupport } from '@/lib/llm/types';
 import type { Settings } from '@/lib/storage/types';
 import { getActiveProviderConfig } from '@/lib/storage/types';
 import { DEFAULT_SETTINGS } from '@/lib/storage/types';
+import { parseJsonSafe } from '@/lib/json-repair';
 import { sendMessage } from '@/lib/messaging/bridge';
 import type {
   ExtractResultMessage,
@@ -107,6 +108,7 @@ export function App() {
   const [extractEpoch, setExtractEpoch] = useState(0);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [notionUrl, setNotionUrl] = useState<string | null>(null);
 
   // Chat state
   const [chatMessages, setChatMessages] = useState<DisplayMessage[]>([]);
@@ -130,6 +132,7 @@ export function App() {
         if (response.tabId) setLockedTabId(response.tabId);
         // Reset summary & chat when page changes
         setSummary(null);
+        setNotionUrl(null);
         setChatMessages([]);
       }
     } catch {
@@ -180,6 +183,7 @@ export function App() {
       if (tabId !== lockedTabId) return;
       setLockedTabId(null);
       setSummary(null);
+      setNotionUrl(null);
       setChatMessages([]);
       extractContent();
     };
@@ -250,6 +254,7 @@ export function App() {
 
   const handleSummarize = useCallback(async (userInstructions?: string) => {
     setLoading(true);
+    setNotionUrl(null);
 
     // Show user instructions in chat if provided
     if (userInstructions) {
@@ -299,6 +304,7 @@ export function App() {
       }) as ExportResultMessage;
 
       if (response.success && response.url) {
+        setNotionUrl(response.url);
         setToast({ message: 'Exported to Notion!', type: 'success' });
       } else {
         setToast({ message: response.error || 'Export failed', type: 'error' });
@@ -342,6 +348,7 @@ export function App() {
 
       if (json) {
         setSummary(json);
+        setNotionUrl(null);
         setToast({ message: 'Summary updated', type: 'success' });
       }
 
@@ -389,7 +396,6 @@ export function App() {
 
     if (response.success) {
       setSettings(newSettings);
-      setToast({ message: 'Settings saved', type: 'success' });
     }
   }, []);
 
@@ -495,6 +501,7 @@ export function App() {
               summary={summary}
               content={content}
               onExport={settings.notion.apiKey ? handleExport : undefined}
+              notionUrl={notionUrl}
             />
           </div>
         )}
@@ -598,9 +605,30 @@ function findMatchingBrace(raw: string, start: number): number {
 }
 
 function extractJsonAndText(raw: string): { json: SummaryDocument | null; text: string } {
-  // Strategy 1: Look for an explicit ```json fence (the format we ask the LLM to use).
-  // Only ```json is matched — plain ``` fences are left alone since the LLM uses them
-  // in explanatory code blocks that should NOT be treated as summary updates.
+  // Strategy 1: Structured JSON response — {"text": "...", "summary": {...} | null}
+  // This is the preferred format when jsonMode is enabled in the provider.
+  {
+    let cleaned = raw.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    const parsed = parseJsonSafe(cleaned) as Record<string, unknown> | null;
+    if (parsed && typeof parsed === 'object' && 'text' in parsed) {
+      const text = typeof parsed.text === 'string' ? parsed.text : '';
+      const summary = parsed.summary;
+      let json: SummaryDocument | null = null;
+      if (summary && typeof summary === 'object' && (summary as Record<string, unknown>).tldr && (summary as Record<string, unknown>).summary) {
+        json = normalizeSummary(summary as Record<string, unknown>);
+      }
+      return { json, text };
+    }
+    // Also handle a flat summary object (has tldr+summary but no text field)
+    if (parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).tldr && (parsed as Record<string, unknown>).summary) {
+      return { json: normalizeSummary(parsed as Record<string, unknown>), text: '' };
+    }
+  }
+
+  // Strategy 2: Look for an explicit ```json fence (legacy format).
   const fenceStart = raw.indexOf('```json');
 
   if (fenceStart !== -1) {
@@ -609,12 +637,10 @@ function extractJsonAndText(raw: string): { json: SummaryDocument | null; text: 
       const jsonEnd = findMatchingBrace(raw, jsonStart);
       let json: SummaryDocument | null = null;
       if (jsonEnd !== -1) {
-        try {
-          const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
-          if (parsed.tldr && parsed.summary) {
-            json = normalizeSummary(parsed);
-          }
-        } catch { /* malformed JSON */ }
+        const parsed = parseJsonSafe(raw.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown> | null;
+        if (parsed && parsed.tldr && parsed.summary) {
+          json = normalizeSummary(parsed);
+        }
       }
       // Always strip the ```json block from chat text
       const searchFrom = jsonEnd !== -1 ? jsonEnd + 1 : fenceStart + 7;
@@ -625,17 +651,18 @@ function extractJsonAndText(raw: string): { json: SummaryDocument | null; text: 
     }
   }
 
-  // Strategy 2: Entire response is JSON (no surrounding text)
-  try {
-    let cleaned = raw.trim();
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  // Strategy 3: Unfenced JSON object embedded in surrounding text.
+  const braceIdx = raw.indexOf('{');
+  if (braceIdx !== -1) {
+    const braceEnd = findMatchingBrace(raw, braceIdx);
+    if (braceEnd !== -1) {
+      const parsed = parseJsonSafe(raw.slice(braceIdx, braceEnd + 1)) as Record<string, unknown> | null;
+      if (parsed && parsed.tldr && parsed.summary) {
+        const text = (raw.slice(0, braceIdx) + raw.slice(braceEnd + 1)).trim();
+        return { json: normalizeSummary(parsed), text };
+      }
     }
-    const parsed = JSON.parse(cleaned);
-    if (parsed.tldr && parsed.summary) {
-      return { json: normalizeSummary(parsed), text: '' };
-    }
-  } catch { /* not JSON */ }
+  }
 
   return { json: null, text: raw };
 }

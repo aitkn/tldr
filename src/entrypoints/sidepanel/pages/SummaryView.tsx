@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useState, useEffect } from 'preact/hooks';
 import type { SummaryDocument } from '@/lib/summarizer/types';
 import type { ExtractedContent } from '@/lib/extractors/types';
 import { MarkdownRenderer } from '@/components/MarkdownRenderer';
@@ -12,9 +12,12 @@ interface SummaryContentProps {
   summary: SummaryDocument;
   content: ExtractedContent | null;
   onExport?: () => void;
+  notionUrl?: string | null;
 }
 
-export function SummaryContent({ summary, content, onExport }: SummaryContentProps) {
+export function SummaryContent({ summary, content, onExport, notionUrl }: SummaryContentProps) {
+  const [mdSaved, setMdSaved] = useState(false);
+  useEffect(() => setMdSaved(false), [summary]);
   return (
     <div>
       {/* TLDR */}
@@ -146,38 +149,70 @@ export function SummaryContent({ summary, content, onExport }: SummaryContentPro
       )}
 
       {/* Export actions */}
-      <div style={{ display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
+      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', paddingTop: '8px', paddingBottom: '8px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
         {onExport && (
-          <button
-            onClick={onExport}
-            title="Export summary to Notion"
-            style={{
-              padding: '8px 20px',
-              borderRadius: '20px',
-              border: 'none',
-              backgroundColor: 'var(--md-sys-color-primary)',
-              color: 'var(--md-sys-color-on-primary)',
-              font: 'var(--md-sys-typescale-label-large)',
-              cursor: 'pointer',
-            }}
-          >
-            Export to Notion
-          </button>
+          notionUrl ? (
+            <a
+              href={notionUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open exported page in Notion"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 20px',
+                borderRadius: '20px',
+                border: '1px solid var(--md-sys-color-outline)',
+                backgroundColor: 'transparent',
+                color: 'var(--md-sys-color-on-surface)',
+                font: 'var(--md-sys-typescale-label-large)',
+                cursor: 'pointer',
+                textDecoration: 'none',
+              }}
+            >
+              Open in Notion
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+                <path d="M6 3H3v10h10v-3M9 3h4v4M14 2L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </a>
+          ) : (
+            <button
+              onClick={onExport}
+              title="Export summary to Notion"
+              style={{
+                padding: '8px 20px',
+                borderRadius: '20px',
+                border: 'none',
+                backgroundColor: 'var(--md-sys-color-primary)',
+                color: 'var(--md-sys-color-on-primary)',
+                font: 'var(--md-sys-typescale-label-large)',
+                cursor: 'pointer',
+              }}
+            >
+              Export to Notion
+            </button>
+          )
         )}
         <button
-          onClick={() => downloadMarkdown(summary, content)}
-          title="Download summary as Markdown"
+          onClick={() => {
+            downloadMarkdown(summary, content);
+            setMdSaved(true);
+          }}
+          disabled={mdSaved}
+          title={mdSaved ? 'Markdown saved' : 'Download summary as Markdown'}
           style={{
             padding: '8px 20px',
             borderRadius: '20px',
             border: '1px solid var(--md-sys-color-outline)',
             backgroundColor: 'transparent',
-            color: 'var(--md-sys-color-on-surface)',
+            color: mdSaved ? 'var(--md-sys-color-on-surface-variant)' : 'var(--md-sys-color-on-surface)',
             font: 'var(--md-sys-typescale-label-large)',
-            cursor: 'pointer',
+            cursor: mdSaved ? 'default' : 'pointer',
+            opacity: mdSaved ? 0.5 : 1,
           }}
         >
-          Save .md
+          {mdSaved ? 'Saved' : 'Save .md'}
         </button>
       </div>
     </div>
