@@ -191,7 +191,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
     for (const el of mermaidEls) {
       if (el.dataset.source) {
         el.removeAttribute('data-processed');
-        el.innerHTML = el.dataset.source;
+        el.textContent = el.dataset.source ?? '';
       } else {
         el.dataset.source = el.textContent || '';
       }
