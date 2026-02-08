@@ -122,7 +122,7 @@ function getMermaidConfig(theme: 'light' | 'dark') {
   return {
     startOnLoad: false,
     theme: 'base' as const,
-    securityLevel: 'loose' as const,
+    securityLevel: 'strict' as const,
     themeVariables: MERMAID_THEME_VARS[theme],
   };
 }
