@@ -40,6 +40,9 @@ export async function fetchImages(
 }
 
 async function fetchSingleImage(img: ExtractedImage): Promise<FetchedImage | null> {
+  // Only fetch http(s) URLs — reject file://, data:, blob:, etc.
+  try { const u = new URL(img.url); if (u.protocol !== 'https:' && u.protocol !== 'http:') return null; } catch { return null; }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
