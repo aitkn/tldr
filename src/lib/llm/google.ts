@@ -15,6 +15,7 @@ export class GoogleProvider implements LLMProvider {
 
   async sendChat(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
     const { systemInstruction, contents } = convertMessages(messages);
+    // Google's API requires the key as a query parameter (not a header) — this is their design.
     const url = `${this.endpoint}/v1beta/models/${this.config.model}:generateContent?key=${this.config.apiKey}`;
 
     const generationConfig: Record<string, unknown> = {
