@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'preact/hooks';
 import type { SummaryDocument } from '@/lib/summarizer/types';
 import type { ExtractedContent } from '@/lib/extractors/types';
-import { MarkdownRenderer } from '@/components/MarkdownRenderer';
+import { MarkdownRenderer, InlineMarkdown } from '@/components/MarkdownRenderer';
 
 const LANG_LABELS: Record<string, string> = {
   en: 'EN', es: 'ES', fr: 'FR', de: 'DE',
@@ -22,7 +22,7 @@ export function SummaryContent({ summary, content, onExport, notionUrl }: Summar
     <div>
       {/* TLDR */}
       <Section title="TL;DR" defaultOpen>
-        <p style={{ font: 'var(--md-sys-typescale-body-large)', lineHeight: 1.5, color: 'var(--md-sys-color-on-surface)' }}>{summary.tldr}</p>
+        <p style={{ font: 'var(--md-sys-typescale-body-large)', lineHeight: 1.5, color: 'var(--md-sys-color-on-surface)' }}><InlineMarkdown text={summary.tldr} /></p>
       </Section>
 
       {/* Key Takeaways */}
@@ -30,7 +30,7 @@ export function SummaryContent({ summary, content, onExport, notionUrl }: Summar
         <Section title="Key Takeaways" defaultOpen>
           <ul style={{ paddingLeft: '20px', font: 'var(--md-sys-typescale-body-medium)', lineHeight: 1.6, color: 'var(--md-sys-color-on-surface)' }}>
             {summary.keyTakeaways.map((point, i) => (
-              <li key={i}>{point}</li>
+              <li key={i}><InlineMarkdown text={point} /></li>
             ))}
           </ul>
         </Section>
@@ -55,7 +55,7 @@ export function SummaryContent({ summary, content, onExport, notionUrl }: Summar
               font: 'var(--md-sys-typescale-body-medium)',
               fontStyle: 'italic',
             }}>
-              "{quote}"
+              "<InlineMarkdown text={quote} />"
             </blockquote>
           ))}
         </Section>
@@ -68,13 +68,13 @@ export function SummaryContent({ summary, content, onExport, notionUrl }: Summar
             <div style={{ flex: 1 }}>
               <strong style={{ color: 'var(--md-sys-color-success)' }}>Pros</strong>
               <ul style={{ paddingLeft: '16px', marginTop: '4px' }}>
-                {summary.prosAndCons.pros.map((p, i) => <li key={i}>{p}</li>)}
+                {summary.prosAndCons.pros.map((p, i) => <li key={i}><InlineMarkdown text={p} /></li>)}
               </ul>
             </div>
             <div style={{ flex: 1 }}>
               <strong style={{ color: 'var(--md-sys-color-error)' }}>Cons</strong>
               <ul style={{ paddingLeft: '16px', marginTop: '4px' }}>
-                {summary.prosAndCons.cons.map((c, i) => <li key={i}>{c}</li>)}
+                {summary.prosAndCons.cons.map((c, i) => <li key={i}><InlineMarkdown text={c} /></li>)}
               </ul>
             </div>
           </div>
@@ -85,7 +85,7 @@ export function SummaryContent({ summary, content, onExport, notionUrl }: Summar
       {summary.commentsHighlights && summary.commentsHighlights.length > 0 && (
         <Section title="Comment Highlights">
           <ul style={{ paddingLeft: '20px', font: 'var(--md-sys-typescale-body-medium)', lineHeight: 1.6 }}>
-            {summary.commentsHighlights.map((h, i) => <li key={i}>{h}</li>)}
+            {summary.commentsHighlights.map((h, i) => <li key={i}><InlineMarkdown text={h} /></li>)}
           </ul>
         </Section>
       )}
@@ -93,7 +93,9 @@ export function SummaryContent({ summary, content, onExport, notionUrl }: Summar
       {/* Conclusion */}
       {summary.conclusion && (
         <Section title="Conclusion">
-          <p style={{ font: 'var(--md-sys-typescale-body-medium)', lineHeight: 1.5, color: 'var(--md-sys-color-on-surface)' }}>{summary.conclusion}</p>
+          <div style={{ font: 'var(--md-sys-typescale-body-medium)', lineHeight: 1.5 }}>
+            <MarkdownRenderer content={summary.conclusion} />
+          </div>
         </Section>
       )}
 

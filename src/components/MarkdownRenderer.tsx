@@ -167,6 +167,11 @@ function useResolvedTheme(): 'light' | 'dark' {
   return theme;
 }
 
+export function InlineMarkdown({ text }: { text: string }) {
+  const html = marked.parseInline(text, { async: false }) as string;
+  return <span class="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 interface MarkdownRendererProps {
   content: string;
 }
