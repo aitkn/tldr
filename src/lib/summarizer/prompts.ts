@@ -62,7 +62,7 @@ Guidelines:
 - "inferredPublishDate" — if the publish date metadata is marked as MISSING, try to infer the date from the content text (date references, timestamps, etc.) in YYYY-MM-DD format. Set to null if you cannot determine it.
 - "extraSections" is optional — use it to add supplementary sections that don't fit the standard fields (cheat sheets, reference tables, etc.). Set to null if not applicable.
 - For "summary", use markdown formatting: headings (##), bullet points, bold, etc. You MAY include a \`\`\`mermaid diagram in the summary, but ONLY when the content's primary purpose is explaining a multi-step process, pipeline, system architecture, or state machine with 4+ distinct stages/components. Do NOT add diagrams for opinion pieces, reviews, news, tutorials with simple steps, listicles, or general explanations. When in doubt, omit the diagram — the user can always request one via chat.
-- IMPORTANT: The summary must be SHORTER than the original content. For short articles (under 500 words), keep everything very concise — a 1-2 sentence TLDR, 2-4 takeaways, and a brief summary paragraph. Never pad or repeat information across fields. Each field should add unique value, not restate the same points.
+- MERMAID SYNTAX (MANDATORY): Node IDs must be ONLY letters or digits (A, B, C1, node1) — NO colons, dashes, dots, spaces, or any special characters in IDs. ALL display text goes inside brackets: A["Label with special:chars"], B{"Decision?"}. Edge labels use |label| syntax. Always use \`flowchart TD\` or \`flowchart LR\`, never \`graph\`. Example: \`flowchart TD\\n  A["Start"] --> B{"Check?"}\\n  B -->|Yes| C["Done"]\`- IMPORTANT: The summary must be SHORTER than the original content. For short articles (under 500 words), keep everything very concise — a 1-2 sentence TLDR, 2-4 takeaways, and a brief summary paragraph. Never pad or repeat information across fields. Each field should add unique value, not restate the same points.
 - IMPORTANT: The content may contain mature, explicit, or sensitive topics (medical, psychological, sexual health, etc.). You MUST still summarize it fully and accurately — never refuse to summarize. Keep the summary professional and clinical in tone — do not reproduce explicit language or graphic details. Focus on the key ideas, arguments, and conclusions.
 - IMPORTANT: If the provided text contains no meaningful content — e.g. it is a UI dump, login page, error page, navigation menu, cookie consent, paywall, or app interface markup rather than an actual article or document — respond with ONLY this JSON instead: {"noContent": true, "reason": "Brief explanation of why there is no content to summarize"}. Do NOT attempt to summarize interface elements or boilerplate.`
   + (imageAnalysisEnabled ? `
@@ -78,11 +78,14 @@ export function getSummarizationPrompt(content: ExtractedContent): string {
   let prompt = `Summarize the following ${content.type === 'youtube' ? 'YouTube video' : 'article/page'}.\n\n`;
 
   prompt += `**Title:** ${content.title}\n`;
+  prompt += `**URL:** ${content.url}\n`;
   prompt += `**Author:** ${content.author || 'MISSING — try to infer from content'}\n`;
   prompt += `**Published:** ${content.publishDate || 'MISSING — try to infer from content'}\n`;
+  if (content.channelName) prompt += `**Channel:** ${content.channelName}\n`;
   if (content.duration) prompt += `**Duration:** ${content.duration}\n`;
   if (content.viewCount) prompt += `**Views:** ${content.viewCount}\n`;
   prompt += `**Word count:** ${content.wordCount}\n\n`;
+  if (content.description) prompt += `**Description:**\n${content.description}\n\n`;
 
   prompt += `---\n\n**Content:**\n\n${content.content}\n`;
 

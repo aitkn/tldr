@@ -322,19 +322,27 @@ async function handleChatMessage(
     const cachedImages = (settings.enableImageAnalysis && hasVisionCapability) ? await getCachedImages() : [];
     const hasImages = cachedImages.length > 0;
 
+    const metaLines = [`Title: ${content.title}`, `URL: ${content.url}`];
+    if (content.channelName) metaLines.push(`Channel: ${content.channelName}`);
+    if (content.description) metaLines.push(`Description: ${content.description}`);
+
     let systemPrompt = `You are a helpful assistant that helps refine and discuss content summaries.
-The user has a summary of a ${content.type === 'youtube' ? 'YouTube video' : 'web page'} titled "${content.title}".
+The user has a summary of a ${content.type === 'youtube' ? 'YouTube video' : 'web page'}.
+
+Source metadata:
+${metaLines.join('\n')}
 
 Current summary (JSON):
 ${JSON.stringify(summary, null, 2)}
 
 Response format rules:
-- If you need to UPDATE the summary, include the full updated JSON inside a \`\`\`json fenced code block.
-- If you want to say something to the user (explanation, answer, comment), write it as plain text OUTSIDE the code block.
-- You may include BOTH a text message and a JSON update in the same response, or just one of them.
+- You MUST respond with a JSON object matching this structure: {"text": "your message", "summary": <updated summary object or null>}
+- The "text" field contains your message to the user (explanation, answer, comment). Markdown formatting is supported. Use an empty string if you have nothing to say beyond the update.
+- The "summary" field contains the COMPLETE updated summary object (all fields) when you need to update it. Set to null if no update is needed.
+- IMPORTANT: Always respond with valid JSON. Do not include anything outside the JSON object — no markdown fences, no extra text.
 - When updating the summary, always return the COMPLETE JSON object (all fields), not just the changed parts.
-- Never wrap plain-text chat in a code block. Only use \`\`\`json for summary updates.
-- To add custom sections (cheat sheets, tables, extras the user requests), use the "extraSections" array field: [{"title": "Section Name", "content": "markdown content"}]. Content supports full markdown and \`\`\`mermaid diagrams (flowchart, sequence, timeline, etc.).`;
+- To add custom sections (cheat sheets, tables, extras the user requests), use the "extraSections" array field: [{"title": "Section Name", "content": "markdown content"}]. Content supports full markdown and mermaid diagrams (flowchart, sequence, timeline, etc.).
+- MERMAID SYNTAX (MANDATORY): Node IDs must be ONLY letters or digits (A, B, C1, node1) — NO colons, dashes, dots, spaces, or any special characters in IDs. ALL display text goes inside brackets: A["Label with special:chars"], B{"Decision?"}. Edge labels use |label| syntax. Always use \`flowchart TD\` or \`flowchart LR\`, never \`graph\`. Example: \`flowchart TD\\n  A["Start"] --> B{"Check?"}\\n  B -->|Yes| C["Done"]\``;
 
     if (hasImages) {
       systemPrompt += `\n\nYou have multimodal capabilities — images from the page are attached to this conversation. You can analyze and reference them when answering questions or updating the summary.`;
@@ -353,7 +361,7 @@ Response format rules:
       }
     }
 
-    const response = await provider.sendChat(chatMessages);
+    const response = await provider.sendChat(chatMessages, { jsonMode: true });
     return { type: 'CHAT_RESPONSE', success: true, message: response };
   } catch (err) {
     return {

@@ -33,10 +33,28 @@ export const youtubeExtractor: ContentExtractor = {
       doc.querySelector('link[itemprop="name"]')?.getAttribute('content') ||
       undefined;
 
+    // YouTube's description is collapsed by default (#snippet shows truncated text,
+    // #content has the full text but is hidden). Click "...more" to expand it first.
+    const expander = doc.querySelector('ytd-text-inline-expander');
+    const expandBtn = expander?.querySelector('tp-yt-paper-button#expand') as HTMLElement | null;
+    if (expandBtn) expandBtn.click();
+
+    // Read full description from the expanded #content container;
+    // fall back to #snippet, then meta tags (~155 chars truncated by YouTube).
+    const fullDescEl =
+      expander?.querySelector('#content yt-attributed-string') ||
+      expander?.querySelector('#content yt-formatted-string') ||
+      expander?.querySelector('#snippet yt-attributed-string') ||
+      expander?.querySelector('#snippet yt-formatted-string');
     const description =
+      fullDescEl?.textContent?.trim() ||
       doc.querySelector('meta[name="description"]')?.getAttribute('content') ||
       doc.querySelector('meta[property="og:description"]')?.getAttribute('content') ||
       undefined;
+
+    // Collapse it back to avoid visual side-effects
+    const collapseBtn = expander?.querySelector('tp-yt-paper-button#collapse') as HTMLElement | null;
+    if (collapseBtn) collapseBtn.click();
 
     const liveDateText = doc.querySelector('#info-strings yt-formatted-string')?.textContent?.trim();
     const publishDate =
