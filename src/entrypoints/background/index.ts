@@ -35,7 +35,11 @@ export default defineBackground(() => {
     .catch(console.error);
 
   chromeObj.runtime.onMessage.addListener(
-    (message: unknown, _sender: unknown, sendResponse: (response: unknown) => void) => {
+    (message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response: unknown) => void) => {
+      if (sender.id !== chromeObj.runtime.id) {
+        sendResponse({ success: false, error: 'Unauthorized sender' });
+        return;
+      }
       handleMessage(message as Message)
         .then(sendResponse)
         .catch((err) => {

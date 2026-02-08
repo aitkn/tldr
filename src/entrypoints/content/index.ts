@@ -9,7 +9,11 @@ export default defineContentScript({
   main() {
     const chromeRuntime = (globalThis as unknown as { chrome: { runtime: typeof chrome.runtime } }).chrome.runtime;
     chromeRuntime.onMessage.addListener(
-      (message: unknown, _sender: unknown, sendResponse: (response: unknown) => void) => {
+      (message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response: unknown) => void) => {
+        if (sender.id !== chromeRuntime.id) {
+          sendResponse({ success: false, error: 'Unauthorized sender' });
+          return;
+        }
         const msg = message as { type: string; videoId?: string; hintLang?: string };
         if (msg.type === 'EXTRACT_CONTENT') {
           extractAndResolve()
