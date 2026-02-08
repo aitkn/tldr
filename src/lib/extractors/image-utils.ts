@@ -27,6 +27,8 @@ export function extractRichImages(container: HTMLElement): ExtractedImage[] {
     if (!src || src.startsWith('data:')) continue;
     if (seen.has(src)) continue;
     if (isAdOrTracking(src)) continue;
+    // Skip GIFs — LLM APIs only support JPEG, PNG, and WEBP
+    if (/\.gif(\?|$)/i.test(src)) continue;
 
     const width = img.naturalWidth || img.width || 0;
     const height = img.naturalHeight || img.height || 0;

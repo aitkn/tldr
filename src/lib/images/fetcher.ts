@@ -9,6 +9,7 @@ export interface FetchedImage {
   caption?: string;
 }
 
+const SUPPORTED_MIME_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 const MAX_IMAGE_BYTES = 1_024_000; // 1 MB
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_DIMENSION = 1024;
@@ -50,13 +51,19 @@ async function fetchSingleImage(img: ExtractedImage): Promise<FetchedImage | nul
     if (!contentType.startsWith('image/')) return null;
 
     const blob = await response.blob();
+    const mimeType = blob.type || contentType.split(';')[0] || 'image/jpeg';
+
+    // LLM APIs only support JPEG, PNG, and WEBP — convert anything else (e.g. GIF)
+    if (!SUPPORTED_MIME_TYPES.has(mimeType)) {
+      return await resizeAndEncode(blob, img);
+    }
+
     if (blob.size > MAX_IMAGE_BYTES) {
       // Try to resize
       return await resizeAndEncode(blob, img);
     }
 
     const base64 = await blobToBase64(blob);
-    const mimeType = blob.type || 'image/jpeg';
 
     return { url: img.url, base64, mimeType, tier: img.tier, alt: img.alt, caption: img.caption };
   } catch {
