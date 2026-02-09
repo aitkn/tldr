@@ -38,6 +38,9 @@
         --md-sys-color-success: #16a34a;
         --md-sys-color-success-container: #dcfce7;
         --md-sys-color-on-success-container: #052e16;
+        --md-sys-color-warning: #b45309;
+        --md-sys-color-warning-container: #fef3c7;
+        --md-sys-color-on-warning-container: #78350f;
         --md-sys-color-info-container: #dbe4ff;
         --md-sys-color-on-info-container: #0a2463;
         --md-sys-color-inverse-surface: #2f3033;
@@ -68,6 +71,9 @@
         --md-sys-color-success: #4ade80;
         --md-sys-color-success-container: #052e16;
         --md-sys-color-on-success-container: #dcfce7;
+        --md-sys-color-warning: #fbbf24;
+        --md-sys-color-warning-container: #78350f;
+        --md-sys-color-on-warning-container: #fef3c7;
         --md-sys-color-info-container: #1a3a8a;
         --md-sys-color-on-info-container: #dbe4ff;
         --md-sys-color-inverse-surface: #e3e2e6;
@@ -179,6 +185,7 @@
       @keyframes slideDown { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
       @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
       @keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }
+      @keyframes bounceRight { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(6px); } }
     </style>
   </head>
   <body>

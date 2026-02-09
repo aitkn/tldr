@@ -263,7 +263,7 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
 
     let imageAnalysisEnabled = false;
     let modelVision: VisionSupport = 'unknown';
-    if (settings.enableImageAnalysis && content.richImages?.length) {
+    if ((settings.enableImageAnalysis ?? true) && content.richImages?.length) {
       modelVision = await getModelVision(provider, llmConfig.providerId, llmConfig.model);
       imageAnalysisEnabled = modelVision === 'base64' || modelVision === 'url';
     }
@@ -364,7 +364,7 @@ async function handleChatMessage(
     const key = `${llmConfig.providerId}:${llmConfig.model}`;
     const visionCached = settings.modelCapabilities?.[key]?.vision;
     const hasVisionCapability = visionCached === 'base64' || visionCached === 'url';
-    const cached = (settings.enableImageAnalysis && hasVisionCapability) ? await getCachedImages() : { images: [], urls: [] };
+    const cached = ((settings.enableImageAnalysis ?? true) && hasVisionCapability) ? await getCachedImages() : { images: [], urls: [] };
     const cachedImages = cached.images;
     const cachedImageUrls = cached.urls;
     const hasImages = cachedImages.length > 0;

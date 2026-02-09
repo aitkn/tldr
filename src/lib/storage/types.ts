@@ -27,6 +27,7 @@ export interface Settings {
   cachedModels?: Record<string, ModelInfo[]>;
   modelCapabilities?: Record<string, ModelCapabilities>;
   enableImageAnalysis?: boolean;
+  onboardingCompleted?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

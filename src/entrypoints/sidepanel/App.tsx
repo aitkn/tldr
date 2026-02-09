@@ -788,13 +788,11 @@ function ContentIndicators({ content, settings }: { content: ExtractedContent; s
 
   // Compute image analysis status based on model capabilities
   let willAnalyze = false;
-  let urlMode = false;
   if (imageCount > 0) {
     const activeConfig = getActiveProviderConfig(settings);
     const key = `${settings.activeProviderId}:${activeConfig.model}`;
     const vision = settings.modelCapabilities?.[key]?.vision;
-    willAnalyze = !!(settings.enableImageAnalysis && (vision === 'base64' || vision === 'url'));
-    urlMode = vision === 'url';
+    willAnalyze = !!((settings.enableImageAnalysis ?? true) && (vision === 'base64' || vision === 'url'));
   }
 
   return (
@@ -815,7 +813,7 @@ function ContentIndicators({ content, settings }: { content: ExtractedContent; s
         <IndicatorChip
           icon={String.fromCodePoint(0x1F5BC)}
           label={willAnalyze
-            ? `${imageCount} image${imageCount > 1 ? 's' : ''} \u2014 will analyze${urlMode ? ' (URLs)' : ''}`
+            ? `${imageCount} image${imageCount > 1 ? 's' : ''} \u2014 will analyze`
             : `${imageCount} image${imageCount > 1 ? 's' : ''}`}
           variant={willAnalyze ? 'success' : 'neutral'}
         />
@@ -826,8 +824,8 @@ function ContentIndicators({ content, settings }: { content: ExtractedContent; s
 
 function IndicatorChip({ icon, label, variant }: { icon: string; label: string; variant: 'success' | 'neutral' | 'warning' }) {
   const colors = {
-    success: { bg: 'var(--md-sys-color-success-container, #d1fae5)', fg: 'var(--md-sys-color-on-success-container, #065f46)' },
-    warning: { bg: '#fef3c7', fg: '#92400e' },
+    success: { bg: 'var(--md-sys-color-success-container)', fg: 'var(--md-sys-color-on-success-container)' },
+    warning: { bg: 'var(--md-sys-color-warning-container)', fg: 'var(--md-sys-color-on-warning-container)' },
     neutral: { bg: 'var(--md-sys-color-surface-container-high)', fg: 'var(--md-sys-color-on-surface-variant)' },
   };
   return (

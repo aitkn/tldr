@@ -107,12 +107,12 @@ export function ChatInputBar({ value, onChange, onSubmit, isFirstSubmit, loading
               backgroundColor: summarizeVariant === 'disabled'
                 ? 'var(--md-sys-color-surface-container-highest)'
                 : summarizeVariant === 'amber'
-                  ? '#f59e0b'
+                  ? 'var(--md-sys-color-warning)'
                   : 'var(--md-sys-color-primary)',
               color: summarizeVariant === 'disabled'
                 ? 'var(--md-sys-color-outline)'
                 : summarizeVariant === 'amber'
-                  ? '#fff'
+                  ? 'var(--md-sys-color-on-primary)'
                   : 'var(--md-sys-color-on-primary)',
               font: 'var(--md-sys-typescale-label-large)',
               cursor: !canSubmit ? 'default' : 'pointer',

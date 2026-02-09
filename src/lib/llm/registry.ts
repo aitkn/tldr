@@ -11,6 +11,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultContextWindow: 128000,
     apiKeyUrl: 'https://platform.openai.com/api-keys',
     supportsVision: true,
+    description: 'Versatile, great general knowledge',
   },
   {
     id: 'anthropic',
@@ -19,6 +20,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultContextWindow: 200000,
     apiKeyUrl: 'https://console.anthropic.com/settings/keys',
     supportsVision: true,
+    description: 'Excellent for code and analysis',
   },
   {
     id: 'google',
@@ -27,6 +29,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultContextWindow: 1000000,
     apiKeyUrl: 'https://aistudio.google.com/apikey',
     supportsVision: true,
+    description: 'Huge 1M token context window',
   },
   {
     id: 'xai',
@@ -35,6 +38,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultContextWindow: 128000,
     apiKeyUrl: 'https://console.x.ai/',
     supportsVision: true,
+    description: 'Fast inference speed',
   },
   {
     id: 'deepseek',
@@ -42,12 +46,14 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
     defaultEndpoint: 'https://api.deepseek.com',
     defaultContextWindow: 64000,
     apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+    description: 'Very affordable pricing',
   },
   {
     id: 'self-hosted',
     name: 'Self-hosted',
     defaultEndpoint: 'http://localhost:11434',
     defaultContextWindow: 100000,
+    description: 'For advanced users (Ollama, etc.)',
   },
 ];
 

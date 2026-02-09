@@ -53,4 +53,5 @@ export interface ProviderDefinition {
   apiKeyUrl?: string;
   /** @deprecated Use per-model vision probe via modelCapabilities instead */
   supportsVision?: boolean;
+  description?: string;
 }
