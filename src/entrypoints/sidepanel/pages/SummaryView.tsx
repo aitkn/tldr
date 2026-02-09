@@ -253,7 +253,7 @@ export function MetadataHeader({ content, summary, providerName, modelName, onPr
           fontWeight: 600,
           textTransform: 'uppercase',
         }}>
-          {content.type === 'youtube' ? 'YouTube' : content.type === 'facebook' ? 'Facebook' : content.type === 'reddit' ? 'Reddit' : content.type === 'twitter' ? 'X/Twitter' : content.type}
+          {content.type === 'youtube' ? 'YouTube' : content.type === 'facebook' ? 'Facebook' : content.type === 'reddit' ? 'Reddit' : content.type === 'twitter' ? 'X' : content.type}
         </span>
         {content.estimatedReadingTime > 0 && (
           <span style={{ color: 'var(--md-sys-color-on-surface-variant)', font: 'var(--md-sys-typescale-label-small)' }}>

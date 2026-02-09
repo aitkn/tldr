@@ -5,7 +5,7 @@ export function extractComments(doc: Document, url: string): ExtractedComment[] 
   if (/facebook\.com/.test(url)) return [];
   // Reddit comments come from background JSON fetch
   if (/reddit\.com/.test(url)) return [];
-  // Twitter/X replies are extracted by the twitter extractor
+  // X replies are extracted by the X extractor
   if (/(?:twitter|x)\.com/.test(url)) return [];
 
   if (/youtube\.com|youtu\.be/.test(url)) {

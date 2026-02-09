@@ -374,7 +374,7 @@ async function handleChatMessage(
 
     const contentLabel = content.type === 'youtube' ? 'YouTube video'
       : content.type === 'reddit' ? 'Reddit discussion'
-      : content.type === 'twitter' ? 'X/Twitter thread'
+      : content.type === 'twitter' ? 'X thread'
       : 'web page';
 
     let systemPrompt = `You are a helpful assistant that helps refine and discuss content summaries.

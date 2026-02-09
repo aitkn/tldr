@@ -81,7 +81,7 @@ export function getSummarizationPrompt(content: ExtractedContent): string {
   const isDiscussion = content.type === 'reddit' || content.type === 'twitter';
   const contentLabel = content.type === 'youtube' ? 'YouTube video'
     : content.type === 'reddit' ? 'Reddit discussion'
-    : content.type === 'twitter' ? 'X/Twitter thread'
+    : content.type === 'twitter' ? 'X thread'
     : 'article/page';
 
   let prompt = `Summarize the following ${contentLabel}.\n\n`;
