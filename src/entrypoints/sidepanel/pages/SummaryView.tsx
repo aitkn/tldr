@@ -484,7 +484,7 @@ function summaryToMarkdown(summary: SummaryDocument, content: ExtractedContent |
   return lines.join('\n');
 }
 
-function downloadMarkdown(summary: SummaryDocument, content: ExtractedContent | null) {
+export function downloadMarkdown(summary: SummaryDocument, content: ExtractedContent | null) {
   const md = summaryToMarkdown(summary, content);
   const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
   const url = URL.createObjectURL(blob);

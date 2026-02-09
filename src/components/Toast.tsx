@@ -36,7 +36,7 @@ export function Toast({ message, type = 'info', onClose, duration }: ToastProps)
     <div
       style={{
         position: 'fixed',
-        top: '8px',
+        top: '56px',
         left: '16px',
         right: '16px',
         padding: '12px 16px',

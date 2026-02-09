@@ -21,7 +21,7 @@ import type {
   CheckNotionDuplicateResultMessage,
 } from '@/lib/messaging/types';
 import type { ModelInfo } from '@/lib/llm/types';
-import { SummaryContent, MetadataHeader } from './pages/SummaryView';
+import { SummaryContent, MetadataHeader, downloadMarkdown } from './pages/SummaryView';
 import { SettingsView } from './pages/SettingsView';
 import { getProviderDefinition } from '@/lib/llm/registry';
 import { Toast } from '@/components/Toast';
@@ -36,6 +36,17 @@ import { useTheme } from '@/hooks/useTheme';
 interface DisplayMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+interface TabState {
+  content: ExtractedContent | null;
+  summary: SummaryDocument | null;
+  chatMessages: DisplayMessage[];
+  notionUrl: string | null;
+  extractEpoch: number;
+  loading: boolean;
+  chatLoading: boolean;
+  inputValue: string;
 }
 
 
@@ -108,7 +119,7 @@ export function App() {
   const [content, setContent] = useState<ExtractedContent | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [lockedTabId, setLockedTabId] = useState<number | null>(null);
+  const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [extractEpoch, setExtractEpoch] = useState(0);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -125,16 +136,83 @@ export function App() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Extract content from active tab and lock to it
+  // Per-tab state backing store
+  const tabStatesRef = useRef<Map<number, TabState>>(new Map());
+
+  // Window ID — set once on mount to filter cross-window events
+  const windowIdRef = useRef<number | null>(null);
+
+  // Ref-mirrors: reflect latest state so event handlers never read stale closures.
+  // Synced directly in the component body (not via effects) for immediate consistency.
+  const contentRef = useRef<ExtractedContent | null>(null);
+  const summaryRef = useRef<SummaryDocument | null>(null);
+  const chatMessagesRef = useRef<DisplayMessage[]>([]);
+  const notionUrlRef = useRef<string | null>(null);
+  const extractEpochRef = useRef<number>(0);
+  const activeTabIdRef = useRef<number | null>(null);
+  const loadingRef = useRef(false);
+  const chatLoadingRef = useRef(false);
+  const inputValueRef = useRef('');
+
+  // Sync refs on every render (synchronous — no timing gap unlike useEffect)
+  contentRef.current = content;
+  summaryRef.current = summary;
+  chatMessagesRef.current = chatMessages;
+  notionUrlRef.current = notionUrl;
+  extractEpochRef.current = extractEpoch;
+  activeTabIdRef.current = activeTabId;
+  loadingRef.current = loading;
+  chatLoadingRef.current = chatLoading;
+  inputValueRef.current = inputValue;
+
+  const saveTabState = useCallback((tabId: number | null) => {
+    if (tabId == null) return;
+    tabStatesRef.current.set(tabId, {
+      content: contentRef.current,
+      summary: summaryRef.current,
+      chatMessages: chatMessagesRef.current,
+      notionUrl: notionUrlRef.current,
+      extractEpoch: extractEpochRef.current,
+      loading: loadingRef.current,
+      chatLoading: chatLoadingRef.current,
+      inputValue: inputValueRef.current,
+    });
+  }, []);
+
+  const restoreTabState = useCallback((tabId: number) => {
+    const saved = tabStatesRef.current.get(tabId);
+    if (saved) {
+      setContent(saved.content);
+      setSummary(saved.summary);
+      setChatMessages(saved.chatMessages);
+      setNotionUrl(saved.notionUrl);
+      setExtractEpoch(saved.extractEpoch);
+      setLoading(saved.loading);
+      setChatLoading(saved.chatLoading);
+      setInputValue(saved.inputValue);
+    } else {
+      setContent(null);
+      setSummary(null);
+      setChatMessages([]);
+      setNotionUrl(null);
+      setLoading(false);
+      setChatLoading(false);
+      setInputValue('');
+    }
+  }, []);
+
+  // Extract content from active tab
   const extractContent = useCallback(async () => {
     setExtracting(true);
     try {
       const response = await sendMessage({ type: 'EXTRACT_CONTENT' }) as ExtractResultMessage;
       if (response.success && response.data) {
+        // Discard if user switched tabs during extraction
+        if (response.tabId && activeTabIdRef.current != null && response.tabId !== activeTabIdRef.current) {
+          return;
+        }
         setContent(response.data);
         setExtractEpoch((n) => n + 1);
-        if (response.tabId) setLockedTabId(response.tabId);
-        // Reset summary & chat when page changes
         setSummary(null);
         setNotionUrl(null);
         setChatMessages([]);
@@ -145,6 +223,13 @@ export function App() {
       setExtracting(false);
     }
   }, []);
+
+  // Refresh: clear cached state for current tab, then re-extract
+  const handleRefresh = useCallback(() => {
+    const tabId = activeTabIdRef.current;
+    if (tabId != null) tabStatesRef.current.delete(tabId);
+    extractContent();
+  }, [extractContent]);
 
   // Load settings on mount
   useEffect(() => {
@@ -164,75 +249,84 @@ export function App() {
     extractContent();
   }, [extractContent]);
 
-  // When no tab is locked (e.g. opened on chrome://), listen for any tab navigation to pick it up
+  // Capture window ID and seed active tab on mount
   useEffect(() => {
-    if (lockedTabId) return;
     const chromeObj = (globalThis as unknown as { chrome: typeof chrome }).chrome;
+    chromeObj.windows.getCurrent((win) => {
+      windowIdRef.current = win.id ?? null;
+    });
+    chromeObj.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]?.id != null) setActiveTabId(tabs[0].id);
+    });
+  }, []);
 
-    const onUpdated = (_tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
-      if (changeInfo.status === 'complete') {
-        extractContent();
-      }
-    };
-    const onActivated = () => {
-      extractContent();
-    };
-
-    chromeObj.tabs.onUpdated.addListener(onUpdated);
-    chromeObj.tabs.onActivated.addListener(onActivated);
-    return () => {
-      chromeObj.tabs.onUpdated.removeListener(onUpdated);
-      chromeObj.tabs.onActivated.removeListener(onActivated);
-    };
-  }, [lockedTabId, extractContent]);
-
-  // Re-extract only when the locked tab navigates or reloads
+  // Unified tab event listeners
   useEffect(() => {
-    if (!lockedTabId) return;
     const chromeObj = (globalThis as unknown as { chrome: typeof chrome }).chrome;
     let spaTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const onUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
-      if (tabId !== lockedTabId) return;
-      if (changeInfo.status === 'complete') {
+    const onActivated = (info: chrome.tabs.TabActiveInfo) => {
+      if (windowIdRef.current != null && info.windowId !== windowIdRef.current) return;
+      const prevTabId = activeTabIdRef.current;
+      saveTabState(prevTabId);
+      setActiveTabId(info.tabId);
+      const cached = tabStatesRef.current.get(info.tabId);
+      if (cached?.content) {
+        restoreTabState(info.tabId);
+      } else {
         extractContent();
       }
-      // SPA navigation (e.g. YouTube): URL changes without a full reload.
-      if (changeInfo.url) {
-        if (spaTimer) clearTimeout(spaTimer);
-        spaTimer = setTimeout(() => extractContent(), 1500);
+    };
+
+    const onUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (tabId === activeTabIdRef.current) {
+        if (changeInfo.status === 'complete') extractContent();
+        if (changeInfo.url) {
+          if (spaTimer) clearTimeout(spaTimer);
+          spaTimer = setTimeout(() => extractContent(), 1500);
+        }
+      } else if (tabStatesRef.current.has(tabId)) {
+        // Background tab navigated — invalidate cache; re-extract on next switch
+        tabStatesRef.current.delete(tabId);
       }
     };
 
-    // Content script detected an in-page content change (e.g. Facebook post modal)
-    const onMessage = (message: unknown) => {
+    const onMessage = (message: unknown, sender: chrome.runtime.MessageSender) => {
       const msg = message as { type?: string };
-      if (msg?.type === 'CONTENT_CHANGED') {
-        if (spaTimer) clearTimeout(spaTimer);
-        spaTimer = setTimeout(() => extractContent(), 800);
+      if (msg?.type !== 'CONTENT_CHANGED') return;
+      if (sender.tab?.id != null && sender.tab.id !== activeTabIdRef.current) return;
+      if (spaTimer) clearTimeout(spaTimer);
+      spaTimer = setTimeout(() => extractContent(), 800);
+    };
+
+    const onRemoved = (tabId: number) => {
+      tabStatesRef.current.delete(tabId);
+      if (tabId === activeTabIdRef.current) {
+        setActiveTabId(null);
+        setContent(null);
+        setSummary(null);
+        setChatMessages([]);
+        setNotionUrl(null);
+        setLoading(false);
+        setChatLoading(false);
+        setInputValue('');
+        // Chrome fires onActivated for the next tab automatically
       }
     };
 
-    // Re-link to the current active tab when the locked tab is closed
-    const onRemoved = (tabId: number) => {
-      if (tabId !== lockedTabId) return;
-      setLockedTabId(null);
-      setSummary(null);
-      setNotionUrl(null);
-      setChatMessages([]);
-      extractContent();
-    };
-
+    chromeObj.tabs.onActivated.addListener(onActivated);
     chromeObj.tabs.onUpdated.addListener(onUpdated);
     chromeObj.tabs.onRemoved.addListener(onRemoved);
     chromeObj.runtime.onMessage.addListener(onMessage);
+
     return () => {
+      chromeObj.tabs.onActivated.removeListener(onActivated);
       chromeObj.tabs.onUpdated.removeListener(onUpdated);
       chromeObj.tabs.onRemoved.removeListener(onRemoved);
       chromeObj.runtime.onMessage.removeListener(onMessage);
       if (spaTimer) clearTimeout(spaTimer);
     };
-  }, [lockedTabId, extractContent]);
+  }, [extractContent, saveTabState, restoreTabState]);
 
   // YouTube/Facebook lazy-load comments as the user scrolls — poll periodically to pick up new ones
   useEffect(() => {
@@ -266,7 +360,7 @@ export function App() {
     const initial = setTimeout(poll, 2000);
 
     return () => { clearInterval(id); clearTimeout(initial); };
-  }, [extractEpoch]); // re-run on every new extraction (URL change or page refresh)
+  }, [extractEpoch, activeTabId]); // re-run on every new extraction or tab switch
 
   // Scroll to bottom when new chat messages arrive
   useEffect(() => {
@@ -297,6 +391,7 @@ export function App() {
   })();
 
   const handleSummarize = useCallback(async (userInstructions?: string) => {
+    const originTabId = activeTabIdRef.current;
     setLoading(true);
     setNotionUrl(null);
 
@@ -314,7 +409,9 @@ export function App() {
           throw new Error(extractResponse.error || 'Failed to extract content');
         }
         extractedContent = extractResponse.data;
-        setContent(extractedContent);
+        if (activeTabIdRef.current === originTabId) {
+          setContent(extractedContent);
+        }
       }
 
       const summaryResponse = await sendMessage({
@@ -326,13 +423,35 @@ export function App() {
       if (!summaryResponse.success || !summaryResponse.data) {
         throw new Error(summaryResponse.error || 'Failed to generate summary');
       }
-      setSummary(summaryResponse.data);
+
+      if (activeTabIdRef.current === originTabId) {
+        setSummary(summaryResponse.data);
+      } else if (originTabId != null) {
+        const saved = tabStatesRef.current.get(originTabId);
+        if (saved) {
+          saved.summary = summaryResponse.data;
+          saved.loading = false;
+        }
+      }
     } catch (err) {
       // Route failures to chat as assistant messages
       const message = err instanceof Error ? err.message : String(err);
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: message }]);
+      if (activeTabIdRef.current === originTabId) {
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: message }]);
+      } else if (originTabId != null) {
+        const saved = tabStatesRef.current.get(originTabId);
+        if (saved) {
+          saved.chatMessages = [...saved.chatMessages, { role: 'assistant', content: message }];
+          saved.loading = false;
+        }
+      }
     } finally {
-      setLoading(false);
+      if (activeTabIdRef.current === originTabId) {
+        setLoading(false);
+      } else if (originTabId != null) {
+        const saved = tabStatesRef.current.get(originTabId);
+        if (saved) saved.loading = false;
+      }
     }
   }, [content]);
 
@@ -396,6 +515,7 @@ export function App() {
 
   const handleChatSend = useCallback(async (text: string) => {
     if (!content) return;
+    const originTabId = activeTabIdRef.current;
 
     setChatMessages((prev) => [...prev, { role: 'user', content: text }]);
     setChatLoading(true);
@@ -427,22 +547,45 @@ export function App() {
       // Parse response: extract ```json block (summary update) and remaining text (chat)
       const { json, text: chatText } = extractJsonAndText(response.message!);
 
-      if (json) {
-        setSummary(json);
-        setNotionUrl(null);
-        setToast({ message: 'Summary updated', type: 'success' });
-      }
-
       // Never show raw JSON — use chat text if available, otherwise a status message
       const displayText = chatText || (json ? 'Summary updated.' : 'Failed to update summary — please try again.');
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: displayText }]);
+
+      if (activeTabIdRef.current === originTabId) {
+        if (json) {
+          setSummary(json);
+          setNotionUrl(null);
+          setToast({ message: 'Summary updated', type: 'success' });
+        }
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: displayText }]);
+      } else if (originTabId != null) {
+        const saved = tabStatesRef.current.get(originTabId);
+        if (saved) {
+          if (json) {
+            saved.summary = json;
+            saved.notionUrl = null;
+          }
+          saved.chatMessages = [...saved.chatMessages, { role: 'assistant', content: displayText }];
+          saved.chatLoading = false;
+        }
+      }
     } catch (err) {
-      setChatMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: `Error: ${err instanceof Error ? err.message : String(err)}` },
-      ]);
+      const errMsg = `Error: ${err instanceof Error ? err.message : String(err)}`;
+      if (activeTabIdRef.current === originTabId) {
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: errMsg }]);
+      } else if (originTabId != null) {
+        const saved = tabStatesRef.current.get(originTabId);
+        if (saved) {
+          saved.chatMessages = [...saved.chatMessages, { role: 'assistant', content: errMsg }];
+          saved.chatLoading = false;
+        }
+      }
     } finally {
-      setChatLoading(false);
+      if (activeTabIdRef.current === originTabId) {
+        setChatLoading(false);
+      } else if (originTabId != null) {
+        const saved = tabStatesRef.current.get(originTabId);
+        if (saved) saved.chatLoading = false;
+      }
     }
   }, [summary, content, chatMessages]);
 
@@ -529,7 +672,11 @@ export function App() {
         }}
         themeMode={themeMode}
         onOpenSettings={() => setSettingsOpen(true)}
-        onRefresh={extractContent}
+        onRefresh={handleRefresh}
+        onExport={settings.notion.apiKey && summary ? handleExport : undefined}
+        onSaveMd={summary && content ? () => downloadMarkdown(summary, content) : undefined}
+        notionUrl={notionUrl}
+        exporting={exporting}
       />
 
       {/* Scrollable content area */}
@@ -867,12 +1014,20 @@ function IndicatorChip({ icon, label, variant }: { icon: string; label: string; 
   );
 }
 
-function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh }: {
+function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh, onExport, onSaveMd, notionUrl, exporting }: {
   onThemeToggle: () => void;
   themeMode: string;
   onOpenSettings: () => void;
   onRefresh: () => void;
+  onExport?: () => void;
+  onSaveMd?: () => void;
+  notionUrl?: string | null;
+  exporting?: boolean;
 }) {
+  const [mdSaved, setMdSaved] = useState(false);
+  // Reset mdSaved when onSaveMd changes (new summary)
+  useEffect(() => setMdSaved(false), [onSaveMd]);
+
   return (
     <div style={{
       display: 'flex',
@@ -886,23 +1041,44 @@ function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh }: {
       position: 'relative',
       boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
     }}>
-      <span title="Too Long; Didn't Read" style={{ font: 'var(--md-sys-typescale-title-large)', color: 'var(--md-sys-color-on-surface)' }}>
-        TL;DR
-      </span>
-      <div style={{ display: 'flex', gap: '4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span title="Too Long; Didn't Read" style={{ font: 'var(--md-sys-typescale-title-large)', color: 'var(--md-sys-color-on-surface)' }}>
+          TL;DR
+        </span>
         <IconButton onClick={() => window.open('https://buymeacoffee.com/aitkn', '_blank', 'noopener')} label="Support">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" /></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" /></svg>
         </IconButton>
-        <IconButton onClick={onRefresh} label="Refresh — re-link to current tab">
+      </div>
+      <div style={{ display: 'flex', gap: '4px' }}>
+        {notionUrl ? (
+          <IconButton onClick={() => window.open(notionUrl, '_blank', 'noopener')} label="Open in Notion">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M5 19h14V5h-7V3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5c-1.1 0-2-.9-2-2v-7h2v7zM10 3v2H6.41l9.83 9.83-1.41 1.41L5 6.41V10H3V3h7z" /></svg>
+          </IconButton>
+        ) : (
+          <IconButton onClick={onExport ? () => onExport() : undefined} label={exporting ? 'Exporting...' : 'Export to Notion'} disabled={!onExport || exporting}>
+            {exporting ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 0.8s linear infinite' }}>
+                <circle cx="12" cy="12" r="10" stroke="var(--md-sys-color-outline-variant)" stroke-width="3" />
+                <path d="M12 2a10 10 0 0 1 10 10" stroke="var(--md-sys-color-primary)" stroke-width="3" stroke-linecap="round" />
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" /></svg>
+            )}
+          </IconButton>
+        )}
+        <IconButton onClick={onSaveMd && !mdSaved ? () => { onSaveMd(); setMdSaved(true); } : undefined} label={mdSaved ? 'Saved' : 'Save .md'} disabled={!onSaveMd || mdSaved}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" /></svg>
+        </IconButton>
+        <IconButton onClick={onRefresh} label="Refresh">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" /></svg>
         </IconButton>
         <IconButton onClick={onThemeToggle} label={`Theme: ${themeMode}`}>
           {themeMode === 'dark' ? (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z" /></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9.37 5.51A7.35 7.35 0 0 0 9.1 7.5c0 4.08 3.32 7.4 7.4 7.4.68 0 1.35-.09 1.99-.27A7.014 7.014 0 0 1 12 19c-3.86 0-7-3.14-7-7 0-2.93 1.81-5.45 4.37-6.49zM12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z" /></svg>
           ) : themeMode === 'light' ? (
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58a.996.996 0 0 0-1.41 0 .996.996 0 0 0 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37a.996.996 0 0 0-1.41 0 .996.996 0 0 0 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0a.996.996 0 0 0 0-1.41l-1.06-1.06zm1.06-10.96a.996.996 0 0 0 0-1.41.996.996 0 0 0-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36a.996.996 0 0 0 0-1.41.996.996 0 0 0-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z" /></svg>
           ) : (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.04 10 9c0 3.31-2.69 6-6 6h-1.77c-.28 0-.5.22-.5.5 0 .12.05.23.13.33.41.47.64 1.06.64 1.67A2.5 2.5 0 0 1 12 22zm0-18c-4.41 0-8 3.59-8 8s3.59 8 8 8c.28 0 .5-.22.5-.5a.54.54 0 0 0-.14-.35c-.41-.46-.63-1.05-.63-1.65a2.5 2.5 0 0 1 2.5-2.5H16c2.21 0 4-1.79 4-4 0-3.86-3.59-7-8-7z" /></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 3H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h6v2H8v2h8v-2h-2v-2h6c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 12H4V5h16v10z" /></svg>
           )}
         </IconButton>
         <IconButton onClick={onOpenSettings} label="Settings">
@@ -915,19 +1091,21 @@ function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh }: {
   );
 }
 
-function IconButton({ onClick, label, children }: { onClick: () => void; label: string; children: preact.ComponentChildren }) {
+function IconButton({ onClick, label, children, disabled }: { onClick?: () => void; label: string; children: preact.ComponentChildren; disabled?: boolean }) {
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
       aria-label={label}
       title={label}
+      disabled={disabled}
       style={{
         background: 'none',
         border: 'none',
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
         padding: '8px',
         borderRadius: 'var(--md-sys-shape-corner-small)',
         color: 'var(--md-sys-color-on-surface-variant)',
+        opacity: disabled ? 0.35 : 1,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
