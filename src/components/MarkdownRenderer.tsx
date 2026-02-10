@@ -177,9 +177,21 @@ interface MarkdownRendererProps {
   content: string;
 }
 
+// Extract raw mermaid source blocks from markdown before DOMPurify can modify them
+function extractMermaidSources(md: string): string[] {
+  const sources: string[] = [];
+  const re = /```mermaid\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(md)) !== null) {
+    sources.push(m[1].replace(/\n$/, ''));
+  }
+  return sources;
+}
+
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   const ref = useRef<HTMLDivElement>(null);
   const theme = useResolvedTheme();
+  const mermaidSources = extractMermaidSources(content);
   const html = DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
 
   // Hide broken images gracefully (URLs may expire, especially social media thumbnails)
@@ -198,14 +210,13 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
     const mermaidEls = ref.current.querySelectorAll<HTMLElement>('pre.mermaid');
     if (mermaidEls.length === 0) return;
 
-    // Restore original source text so mermaid can re-render (it replaces content with SVG)
-    for (const el of mermaidEls) {
-      if (el.dataset.source) {
-        el.removeAttribute('data-processed');
-        el.textContent = el.dataset.source ?? '';
-      } else {
-        el.dataset.source = el.textContent || '';
-      }
+    // Inject raw mermaid source directly from markdown (bypasses DOMPurify text mangling)
+    for (let i = 0; i < mermaidEls.length; i++) {
+      const el = mermaidEls[i];
+      const source = mermaidSources[i] ?? el.dataset.source ?? el.textContent ?? '';
+      el.removeAttribute('data-processed');
+      el.textContent = source;
+      el.dataset.source = source;
     }
 
     initMermaid(theme);
