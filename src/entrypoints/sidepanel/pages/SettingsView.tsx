@@ -933,6 +933,21 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
       }}>
         <div>TL;DR v1.0.0</div>
         <div>&copy; 2026 AI Tech Knowledge LLC</div>
+        <a
+          href="https://github.com/aitkn/tldr/issues"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'inline-block',
+            marginTop: '4px',
+            font: 'var(--md-sys-typescale-label-small)',
+            color: 'var(--md-sys-color-on-surface-variant)',
+            textDecoration: 'none',
+            opacity: 0.7,
+          }}
+        >
+          Help &amp; Feedback
+        </a>
         {!isOnboarding && (
           <button
             onClick={() => {

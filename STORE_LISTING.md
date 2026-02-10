@@ -78,7 +78,7 @@ Used to persist user settings (theme preference, summary language, detail level)
 Used to inject the content extraction script into the active tab when the user requests a summary. The script extracts the page's text content for summarization.
 
 ### tabs
-Used to identify the correct target tab for content extraction when the extension's own side panel is the active context. This allows the extension to fall back to the most recent non-extension tab in the same window.
+Used to detect when the user switches, reloads, or navigates a tab so the side panel can display the correct page metadata. Also used to identify the target tab for content extraction when the side panel is the active context.
 
 ### Host permissions (<all_urls>)
 Required to extract text content from any web page. The extension reads page metadata (title, word count) when the side panel opens. The extracted content is only sent to an external AI provider when the user explicitly clicks "Summarize". Broad host permissions are necessary because the extension supports summarizing content from any website.

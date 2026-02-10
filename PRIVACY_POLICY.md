@@ -66,4 +66,4 @@ Updates to this policy will be reflected in the extension's store listing. The "
 
 ## Contact
 
-If you have questions about this privacy policy, please open an issue at [github.com/proshkin-aitkn/tldr/issues](https://github.com/proshkin-aitkn/tldr/issues).
+If you have questions about this privacy policy, please open an issue at [github.com/aitkn/tldr/issues](https://github.com/aitkn/tldr/issues).

@@ -1,29 +1,33 @@
 # TL;DR — AI Page Summarizer
 
-Chrome extension that summarizes any web page or YouTube video using AI, lets you refine the summary via chat, and saves everything to Notion. Opens in Chrome's side panel for a seamless reading experience.
+Chrome extension that summarizes any web page or YouTube video using AI, lets you refine the summary via chat, and saves everything to Notion or Markdown. Opens in Chrome's side panel for a seamless reading experience.
 
 ## How It Works
 
-1. **Summarize** — Get a structured summary of any web page or YouTube video with key takeaways, notable quotes, and tags
-2. **Refine** — Chat with the AI to adjust the summary, ask follow-up questions, or dig deeper into specific topics
-3. **Save** — Export to Notion with all metadata, tags, and source links preserved
+1. **Summarize** — Get a structured summary with key takeaways, notable quotes, and tags
+2. **Refine** — Chat with the AI to adjust the summary, ask follow-up questions, or request diagrams
+3. **Save & Share** — Export to Notion or Markdown with all metadata, tags, and source links preserved
 
 ## Features
 
-- **Works everywhere** — articles, YouTube (transcripts + comments), Google Docs, any web page
+- **Works everywhere** — articles, YouTube (transcripts + comments), Reddit threads, X/Twitter threads, Facebook posts, Google Docs, SPAs, any web page
+- **Image analysis** — vision-capable models automatically analyze charts, infographics, and screenshots on the page
+- **Visual diagrams** — AI generates Mermaid flowcharts, sequence diagrams, and timelines inline with light/dark theme support
 - **Multiple AI providers** — OpenAI, Anthropic, Google Gemini, xAI, DeepSeek, or any self-hosted OpenAI-compatible endpoint (Ollama, vLLM, etc.)
 - **Bring your own API key** — no subscription, no account, no backend server
-- **Auto-translation** — summarize in your preferred language
+- **Auto-translation** — summarize in your preferred language with exception lists
+- **Markdown & Notion export** — save summaries locally or to your Notion knowledge base
+- **Per-tab state** — switch tabs without losing your summary or chat history
 - **Light, dark, and system themes**
 
 ## Install
 
 ### From Chrome Web Store
-*Coming soon*
+[Install TL;DR](https://chromewebstore.google.com/detail/tldr/pikdhogjjbaakcpedmahckhmajdgdeon)
 
 ### From Source
 ```bash
-git clone https://github.com/proshkin-aitkn/tldr.git
+git clone https://github.com/aitkn/tldr.git
 cd tldr
 pnpm install
 pnpm wxt build
@@ -35,15 +39,15 @@ Then load `.output/chrome-mv3/` as an unpacked extension in `chrome://extensions
 1. Navigate to any web page or YouTube video
 2. Click the TL;DR icon in your toolbar to open the side panel
 3. Press **Summarize** to generate a structured summary
-4. Use the chat input to ask follow-up questions or refine the summary
-5. Export to Notion with one click
+4. Use the chat input to ask follow-up questions, request diagrams, or refine the summary
+5. Export to Notion or download as Markdown
 
 ## Configuration
 
 Open the Settings drawer (gear icon) to:
 - Select your AI provider and enter your API key
-- Choose a model
-- Set summary language and detail level
+- Choose a model (vision support auto-detected)
+- Set summary language, translation exceptions, and detail level
 - Configure Notion export (see below)
 
 ## Notion Integration Setup
@@ -52,7 +56,7 @@ Open the Settings drawer (gear icon) to:
 2. Name it (e.g. "TL;DR") and click **Submit**
 3. Copy the **Internal Integration Secret** (starts with `ntn_`)
 4. Paste it into TL;DR Settings > Notion API Key
-5. Click **Save Settings**, then **Test Connection** to verify
+5. Click **Test Connection** to verify
 
 On your first export, TL;DR will automatically create a "TL;DR Summaries" database in your Notion workspace. Subsequent exports will add pages to the same database.
 
@@ -70,6 +74,7 @@ See the full [Privacy Policy](PRIVACY_POLICY.md).
 - [Preact](https://preactjs.com) — UI rendering
 - [TypeScript](https://www.typescriptlang.org) — type safety
 - [Readability](https://github.com/mozilla/readability) — article extraction
+- [Mermaid](https://mermaid.js.org) — diagram rendering
 - Material Design 3 — design system
 
 ## License
