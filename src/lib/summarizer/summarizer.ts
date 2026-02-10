@@ -58,7 +58,7 @@ export async function summarize(
     mimeType: fi.mimeType,
   }));
   const hasImages = !!(imageContents?.length);
-  let systemPrompt = getSystemPrompt(detailLevel, language, languageExcept, hasImages);
+  let systemPrompt = getSystemPrompt(detailLevel, language, languageExcept, hasImages, content.wordCount);
   if (userInstructions) {
     systemPrompt += `\n\nAdditional user instructions: ${userInstructions}`;
   }
