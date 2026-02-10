@@ -434,8 +434,9 @@ export function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, chatLoading]);
 
-  // Track whether user changed detail level after a summary was generated
+  // Track the detail level that produced the current summary, so cycling back clears the re-summarize state
   const [pendingResummarize, setPendingResummarize] = useState(false);
+  const summaryDetailLevelRef = useRef<Settings['summaryDetailLevel'] | null>(null);
 
   const isFirstSubmit = pendingResummarize || (!summary && chatMessages.length === 0);
 
@@ -497,6 +498,7 @@ export function App() {
 
       if (activeTabIdRef.current === originTabId) {
         setSummary(summaryResponse.data);
+        summaryDetailLevelRef.current = settings.summaryDetailLevel;
       } else if (originTabId != null) {
         const saved = tabStatesRef.current.get(originTabId);
         if (saved) {
@@ -758,12 +760,11 @@ export function App() {
     const levels: Settings['summaryDetailLevel'][] = ['brief', 'standard', 'detailed'];
     const currentIdx = levels.indexOf(settings.summaryDetailLevel);
     const next = levels[(currentIdx + 1) % levels.length];
-    const newSettings = { ...settings, summaryDetailLevel: next };
-    setSettings(newSettings);
+    setSettings({ ...settings, summaryDetailLevel: next });
     sendMessage({ type: 'SAVE_SETTINGS', settings: { summaryDetailLevel: next } });
-    // If a summary already exists, signal that user should re-summarize
     if (summary) {
-      setPendingResummarize(true);
+      // Cycling back to the level that produced the current summary — cancel re-summarize
+      setPendingResummarize(next !== summaryDetailLevelRef.current);
     }
   }, [settings, summary]);
 

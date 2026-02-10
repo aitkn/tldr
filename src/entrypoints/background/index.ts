@@ -789,18 +789,9 @@ async function handleFetchNotionDatabases(): Promise<NotionDatabasesResultMessag
   }
 }
 
-// Onboarding tabs — persisted to chrome.storage.session so they survive SW restarts
+// Onboarding tabs — in-memory tracking (lost on SW restart, which is fine)
 type TrackedTab = { tabId: number; originalDomain: string };
-const _sessionStorage = () => chromeStorage().session;
-
-async function getOnboardingTabs(): Promise<TrackedTab[]> {
-  const result = await _sessionStorage().get('_onboardingTabs');
-  return (result._onboardingTabs as TrackedTab[]) || [];
-}
-
-async function setOnboardingTabs(tabs: TrackedTab[]): Promise<void> {
-  await _sessionStorage().set({ _onboardingTabs: tabs });
-}
+let onboardingTabs: TrackedTab[] = [];
 
 /** Extract root domain (last 2 parts) — e.g. "accounts.x.ai" → "x.ai", "platform.openai.com" → "openai.com" */
 function rootDomain(hostname: string): string {
@@ -814,10 +805,7 @@ async function handleOpenTab(url: string): Promise<{ type: 'OPEN_TAB_RESULT'; su
     const tab = await chromeTabs.create({ url });
     if (tab.id != null) {
       const domain = new URL(url).hostname;
-      const tabs = await getOnboardingTabs();
-      tabs.push({ tabId: tab.id, originalDomain: domain });
-      await setOnboardingTabs(tabs);
-      console.log('[onboarding] tracked tab', tab.id, domain, '→ total:', tabs.length);
+      onboardingTabs.push({ tabId: tab.id, originalDomain: domain });
     }
     return { type: 'OPEN_TAB_RESULT', success: true, tabId: tab.id };
   } catch {
@@ -825,37 +813,28 @@ async function handleOpenTab(url: string): Promise<{ type: 'OPEN_TAB_RESULT'; su
   }
 }
 
-async function handleCloseOnboardingTabs(): Promise<{ type: 'CLOSE_ONBOARDING_TABS_RESULT'; success: boolean; debug?: string }> {
+async function handleCloseOnboardingTabs(): Promise<{ type: 'CLOSE_ONBOARDING_TABS_RESULT'; success: boolean }> {
   try {
     const chromeTabs = (globalThis as unknown as { chrome: { tabs: typeof chrome.tabs } }).chrome.tabs;
-    const tabs = await getOnboardingTabs();
-    await setOnboardingTabs([]); // drain
-    const debugLines: string[] = [`tracked: ${tabs.length} tabs`];
+    const tabs = onboardingTabs;
+    onboardingTabs = [];
     for (const { tabId, originalDomain } of tabs) {
       try {
         const tab = await chromeTabs.get(tabId);
         if (tab?.url) {
           const currentRoot = rootDomain(new URL(tab.url).hostname);
           const originalRoot = rootDomain(originalDomain);
-          const match = currentRoot === originalRoot;
-          debugLines.push(`tab ${tabId}: orig=${originalDomain}(${originalRoot}) cur=${tab.url}(${currentRoot}) match=${match}`);
-          if (match) {
+          if (currentRoot === originalRoot) {
             await chromeTabs.remove(tabId);
           }
-        } else {
-          debugLines.push(`tab ${tabId}: no url (${tab?.status})`);
         }
-      } catch (err) {
-        debugLines.push(`tab ${tabId}: gone (${err})`);
+      } catch {
+        // tab already closed
       }
     }
-    const debug = debugLines.join('\n');
-    console.log('[onboarding] close tabs:\n' + debug);
-    return { type: 'CLOSE_ONBOARDING_TABS_RESULT', success: true, debug };
-  } catch (err) {
-    const debug = `error: ${err}`;
-    console.log('[onboarding] close tabs error:', err);
-    return { type: 'CLOSE_ONBOARDING_TABS_RESULT', success: true, debug };
+    return { type: 'CLOSE_ONBOARDING_TABS_RESULT', success: true };
+  } catch {
+    return { type: 'CLOSE_ONBOARDING_TABS_RESULT', success: true };
   }
 }
 
