@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import type { SummaryDocument } from '@/lib/summarizer/types';
+import { coerceExtraSections, type SummaryDocument } from '@/lib/summarizer/types';
 import type { ExtractedContent } from '@/lib/extractors/types';
 import type { ChatMessage, VisionSupport } from '@/lib/llm/types';
 import type { Settings } from '@/lib/storage/types';
@@ -132,6 +132,76 @@ async function autoFixMermaid(
   }
 
   return finalSummary;
+}
+
+/** Open a print-ready popup window, auto-print, then close it. */
+function printSummary(contentEl: HTMLElement | null) {
+  if (!contentEl) return;
+  const chromeObj = (globalThis as unknown as { chrome: typeof chrome }).chrome;
+
+  // Clone content and force all sections open
+  const clone = contentEl.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('.section-content').forEach(el => {
+    (el as HTMLElement).style.display = 'block';
+  });
+  clone.querySelectorAll('.section-toggle span:first-child').forEach(el => el.remove());
+  clone.querySelectorAll('.no-print').forEach(el => el.remove());
+
+  // Collect inline styles from sidepanel head
+  const styles = Array.from(document.querySelectorAll('style')).map(s => s.outerHTML).join('');
+  const theme = document.documentElement.getAttribute('data-theme') || 'light';
+
+  const html = `<!doctype html>
+<html lang="en" data-theme="${theme}">
+<head>
+<meta charset="UTF-8"/>
+<title>Print Summary</title>
+${styles}
+<style>
+  html, body { height: auto; overflow: visible; }
+  body { padding: 24px; max-width: 800px; margin: 0 auto; }
+  img { max-width: 100% !important; height: auto !important; }
+  .section-toggle { cursor: default; }
+</style>
+</head>
+<body>${clone.innerHTML}</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+
+  // Open as a popup window (not a tab), auto-print, close after
+  chromeObj.windows.create({
+    url,
+    type: 'popup',
+    width: 820,
+    height: 900,
+  }, (win) => {
+    if (!win?.id) return;
+    const winId = win.id;
+    // Wait for the page to load, then trigger print
+    const onUpdated = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (info.status !== 'complete') return;
+      const tabBelongsToWin = win.tabs?.some(t => t.id === tabId);
+      if (!tabBelongsToWin) return;
+      chromeObj.tabs.onUpdated.removeListener(onUpdated);
+      // Inject print trigger + auto-close
+      chromeObj.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          window.addEventListener('afterprint', () => window.close());
+          window.print();
+        },
+      });
+    };
+    chromeObj.tabs.onUpdated.addListener(onUpdated);
+    // Clean up blob URL when window closes
+    chromeObj.windows.onRemoved.addListener(function onRemoved(removedId) {
+      if (removedId !== winId) return;
+      chromeObj.windows.onRemoved.removeListener(onRemoved);
+      URL.revokeObjectURL(url);
+    });
+  });
 }
 
 export function App() {
@@ -946,7 +1016,7 @@ export function App() {
         onDetailLevelCycle={handleDetailLevelCycle}
         debugOpen={debugOpen}
         onToggleDebug={() => setDebugOpen((v) => !v)}
-        onPrint={summary ? () => window.print() : undefined}
+        onPrint={summary ? () => printSummary(scrollAreaRef.current) : undefined}
       />
 
       {/* Scrollable content area */}
@@ -1150,9 +1220,7 @@ function normalizeSummary(parsed: Record<string, unknown>): SummaryDocument {
     conclusion: (parsed.conclusion as string) || '',
     prosAndCons: pc ? { pros: Array.isArray(pc.pros) ? pc.pros : [], cons: Array.isArray(pc.cons) ? pc.cons : [] } : undefined,
     commentsHighlights: Array.isArray(parsed.commentsHighlights) ? parsed.commentsHighlights : undefined,
-    extraSections: parsed.extraSections && typeof parsed.extraSections === 'object' && !Array.isArray(parsed.extraSections)
-      ? Object.fromEntries(Object.entries(parsed.extraSections as Record<string, unknown>).filter(([, v]) => typeof v === 'string'))
-      : undefined,
+    extraSections: coerceExtraSections(parsed.extraSections),
     relatedTopics: Array.isArray(parsed.relatedTopics) ? parsed.relatedTopics : [],
     tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     sourceLanguage: (parsed.sourceLanguage as string) || undefined,
@@ -1195,12 +1263,12 @@ function sanitizePartialUpdate(raw: Record<string, unknown>): Partial<SummaryDoc
         }
         break;
       }
-      case 'extraSections':
-        if (value && typeof value === 'object' && !Array.isArray(value)) {
-          // Keep raw entries — mergeSummaryUpdates handles __DELETE__ at sub-key level
-          result[key] = value;
-        }
+      case 'extraSections': {
+        // Coerce both object and legacy array formats; strip markdown bold from keys
+        const coerced = coerceExtraSections(value);
+        if (coerced) result[key] = coerced;
         break;
+      }
     }
   }
   const keys = Object.keys(result);

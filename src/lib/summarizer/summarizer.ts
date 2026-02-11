@@ -1,6 +1,6 @@
 import type { LLMProvider, ChatMessage, ImageContent } from '../llm/types';
 import type { ExtractedContent } from '../extractors/types';
-import type { SummaryDocument } from './types';
+import { coerceExtraSections, type SummaryDocument } from './types';
 import type { FetchedImage } from '../images/fetcher';
 import { chunkContent, type ChunkOptions } from './chunker';
 import { parseJsonSafe, findMatchingBrace } from '../json-repair';
@@ -228,9 +228,7 @@ function parseSummaryResponse(response: string, imageAnalysisEnabled = false): S
     prosAndCons: pc ? { pros: Array.isArray(pc.pros) ? pc.pros : [], cons: Array.isArray(pc.cons) ? pc.cons : [] } : undefined,
     factCheck: typeof parsed.factCheck === 'string' ? parsed.factCheck : undefined,
     commentsHighlights: Array.isArray(parsed.commentsHighlights) ? parsed.commentsHighlights : undefined,
-    extraSections: parsed.extraSections && typeof parsed.extraSections === 'object' && !Array.isArray(parsed.extraSections)
-      ? Object.fromEntries(Object.entries(parsed.extraSections as Record<string, unknown>).filter(([, v]) => typeof v === 'string'))
-      : undefined,
+    extraSections: coerceExtraSections(parsed.extraSections),
     relatedTopics: Array.isArray(parsed.relatedTopics) ? parsed.relatedTopics : [],
     tags: Array.isArray(parsed.tags) ? parsed.tags : [],
     sourceLanguage: (parsed.sourceLanguage as string) || undefined,
