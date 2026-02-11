@@ -151,55 +151,15 @@ function printSummary(contentEl: HTMLElement | null) {
   const styles = Array.from(document.querySelectorAll('style')).map(s => s.outerHTML).join('');
   const theme = document.documentElement.getAttribute('data-theme') || 'light';
 
-  const html = `<!doctype html>
-<html lang="en" data-theme="${theme}">
-<head>
-<meta charset="UTF-8"/>
-<title>Print Summary</title>
-${styles}
-<style>
-  html, body { height: auto; overflow: visible; }
-  body { padding: 24px; max-width: 800px; margin: 0 auto; }
-  img { max-width: 100% !important; height: auto !important; }
-  .section-toggle { cursor: default; }
-</style>
-</head>
-<body>${clone.innerHTML}</body>
-</html>`;
-
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-
-  // Open as a popup window (not a tab), auto-print, close after
-  chromeObj.windows.create({
-    url,
-    type: 'popup',
-    width: 820,
-    height: 900,
-  }, (win) => {
-    if (!win?.id) return;
-    const winId = win.id;
-    // Wait for the page to load, then trigger print
-    const onUpdated = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
-      if (info.status !== 'complete') return;
-      const tabBelongsToWin = win.tabs?.some(t => t.id === tabId);
-      if (!tabBelongsToWin) return;
-      chromeObj.tabs.onUpdated.removeListener(onUpdated);
-      // Inject print trigger + auto-close
-      chromeObj.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          window.addEventListener('afterprint', () => window.close());
-          window.print();
-        },
-      });
-    };
-    chromeObj.tabs.onUpdated.addListener(onUpdated);
-    // Clean up blob URL when window closes
-    chromeObj.windows.onRemoved.addListener(function onRemoved(removedId) {
-      if (removedId !== winId) return;
-      chromeObj.windows.onRemoved.removeListener(onRemoved);
-      URL.revokeObjectURL(url);
+  // Pass content via session storage, then open the print page
+  chromeObj.storage.session.set({
+    printData: { html: clone.innerHTML, styles, theme },
+  }, () => {
+    chromeObj.windows.create({
+      url: chromeObj.runtime.getURL('print.html'),
+      type: 'popup',
+      width: 820,
+      height: 900,
     });
   });
 }
