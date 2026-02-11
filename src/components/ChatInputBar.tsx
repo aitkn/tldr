@@ -77,6 +77,8 @@ export function ChatInputBar({ value, onChange, onSubmit, isFirstSubmit, loading
         }}
       >
         <textarea
+          id="chat-input"
+          name="chat-input"
           ref={textareaRef}
           value={value}
           onInput={(e) => onChange((e.target as HTMLTextAreaElement).value)}

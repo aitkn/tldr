@@ -609,8 +609,10 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
           </>
         ) : (
           <>
-            <Label>Provider</Label>
+            <Label htmlFor="settings-provider">Provider</Label>
             <select
+              id="settings-provider"
+              name="provider"
               value={currentProviderId}
               onChange={(e) => handleProviderChange((e.target as HTMLSelectElement).value)}
               style={selectStyle}
@@ -625,7 +627,7 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
 
       {/* === API Key Section === */}
       <div style={getSectionStyle('apiKey')}>
-        <Label>
+        <Label htmlFor="settings-api-key">
           API Key
           {currentProviderDef?.apiKeyUrl && (
             <a
@@ -650,6 +652,8 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
           )}
         </Label>
         <input
+          id="settings-api-key"
+          name="api-key"
           type="password"
           value={currentConfig.apiKey}
           onInput={(e) => updateProviderConfig({ apiKey: (e.target as HTMLInputElement).value })}
@@ -684,8 +688,10 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
       {/* === Endpoint URL Section (self-hosted only) === */}
       {isSelfHosted && (
         <div style={getSectionStyle('endpoint')}>
-          <Label>Endpoint URL</Label>
+          <Label htmlFor="settings-endpoint">Endpoint URL</Label>
           <input
+            id="settings-endpoint"
+            name="endpoint"
             type="text"
             value={currentConfig.endpoint || ''}
             onInput={(e) => updateProviderConfig({ endpoint: (e.target as HTMLInputElement).value })}
@@ -708,9 +714,11 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
 
       {/* === Model Section === */}
       <div style={getSectionStyle('model')}>
-        <Label>Model</Label>
+        <Label htmlFor="settings-model">Model</Label>
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           <select
+            id="settings-model"
+            name="model"
             value={currentConfig.model}
             onChange={(e) => {
               const val = (e.target as HTMLSelectElement).value;
@@ -768,8 +776,10 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
       {/* === Context Window Section (self-hosted only) === */}
       {isSelfHosted && (
         <div style={getSectionStyle('contextWindow')}>
-          <Label>Context Window (tokens)</Label>
+          <Label htmlFor="settings-context-window">Context Window (tokens)</Label>
           <input
+            id="settings-context-window"
+            name="context-window"
             type="number"
             value={currentConfig.contextWindow}
             onInput={(e) => updateProviderConfig({ contextWindow: parseInt((e.target as HTMLInputElement).value) || 100000 })}
@@ -795,6 +805,7 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
           <input
             type="checkbox"
             id="enableImageAnalysis"
+            name="enable-image-analysis"
             checked={local.enableImageAnalysis ?? true}
             onChange={(e) => setLocal({ ...local, enableImageAnalysis: (e.target as HTMLInputElement).checked })}
             style={{ margin: 0 }}
@@ -837,7 +848,7 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
       {/* === Notion API Key Section === */}
       <div style={getSectionStyle('notionKey')}>
 
-        <Label>
+        <Label htmlFor="settings-notion-api-key">
           Notion API Key
           <a
             href={isOnboarding ? undefined : 'https://www.notion.so/my-integrations'}
@@ -858,6 +869,8 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
           </a>
         </Label>
         <input
+          id="settings-notion-api-key"
+          name="notion-api-key"
           type="password"
           value={local.notion.apiKey}
           onInput={(e) => setLocal({ ...local, notion: { ...local.notion, apiKey: (e.target as HTMLInputElement).value } })}
@@ -892,9 +905,11 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
 
       {/* === Notion Database Selection Section === */}
       <div style={getSectionStyle('notionDb')}>
-        <Label>Database</Label>
+        <Label htmlFor="settings-notion-db">Database</Label>
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           <select
+            id="settings-notion-db"
+            name="notion-database"
             value={local.notion.databaseId || ''}
             onChange={(e) => {
               const val = (e.target as HTMLSelectElement).value;
@@ -1029,8 +1044,10 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
 
       {/* === Language Section === */}
       <div style={getSectionStyle('language')}>
-        <Label>Translate into</Label>
+        <Label htmlFor="settings-language">Translate into</Label>
         <select
+          id="settings-language"
+          name="language"
           value={local.summaryLanguage}
           onChange={(e) => setLocal({ ...local, summaryLanguage: (e.target as HTMLSelectElement).value })}
           style={selectStyle}
@@ -1370,9 +1387,9 @@ function SectionCard({ title, style, children }: { title: string; style?: Record
   );
 }
 
-function Label({ children }: { children: preact.ComponentChildren }) {
+function Label({ children, htmlFor }: { children: preact.ComponentChildren; htmlFor?: string }) {
   return (
-    <label style={{
+    <label htmlFor={htmlFor} style={{
       display: 'block',
       font: 'var(--md-sys-typescale-label-medium)',
       color: 'var(--md-sys-color-on-surface-variant)',
