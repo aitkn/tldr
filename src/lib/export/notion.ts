@@ -150,6 +150,7 @@ export class NotionAdapter implements ExportAdapter {
                 { name: 'Facebook Post', color: 'blue' },
                 { name: 'Reddit Discussion', color: 'orange' },
                 { name: 'X Thread', color: 'default' },
+                { name: 'GitHub', color: 'purple' },
                 { name: 'Web Page', color: 'gray' },
               ],
             },
@@ -223,7 +224,9 @@ export class NotionAdapter implements ExportAdapter {
             ? 'Reddit Discussion'
             : content.type === 'twitter'
               ? 'X Thread'
-              : 'Web Page';
+              : content.type === 'github'
+                ? 'GitHub'
+                : 'Web Page';
 
     const properties: Record<string, unknown> = {
       Title: {

@@ -418,6 +418,7 @@ async function handleChatMessage(
     const contentLabel = content.type === 'youtube' ? 'YouTube video'
       : content.type === 'reddit' ? 'Reddit discussion'
       : content.type === 'twitter' ? 'X thread'
+      : content.type === 'github' ? 'GitHub page'
       : 'web page';
 
     // Truncate original content based on context window (60% of context, ~4 chars/token)

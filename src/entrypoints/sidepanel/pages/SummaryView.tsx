@@ -14,17 +14,41 @@ interface SummaryContentProps {
   onExport?: () => void;
   notionUrl?: string | null;
   exporting?: boolean;
+  onNavigate?: (url: string) => void;
 }
 
-export function SummaryContent({ summary, content, onExport, notionUrl, exporting }: SummaryContentProps) {
+export function SummaryContent({ summary, content, onExport, notionUrl, exporting, onNavigate }: SummaryContentProps) {
   const [mdSaved, setMdSaved] = useState(false);
   useEffect(() => setMdSaved(false), [summary]);
+
+  // Split TL;DR into body and status line for color-coded rendering
+  const { body: tldrBody, statusLabel, statusText } = splitTldrStatus(summary.tldr);
+
+  // Intercept link clicks — navigate the active browser tab instead of the sidepanel
+  const handleLinkClick = (e: MouseEvent) => {
+    const anchor = (e.target as HTMLElement).closest('a');
+    if (!anchor) return;
+    const url = anchor.href;
+    if (!url || url.startsWith('javascript:')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (onNavigate) onNavigate(url);
+    else window.open(url, '_blank');
+  };
+
   return (
-    <div>
+    // eslint-disable-next-line jsx-a11y/click-events-have-key-events,jsx-a11y/no-static-element-interactions
+    <div onClick={handleLinkClick}>
       {/* TLDR */}
       <Section title="TL;DR" defaultOpen>
         <div class="summary-callout">
-          <div style={{ font: 'var(--md-sys-typescale-body-large)', lineHeight: 1.5 }}><MarkdownRenderer content={summary.tldr} /></div>
+          <div style={{ font: 'var(--md-sys-typescale-body-large)', lineHeight: 1.5 }}><MarkdownRenderer content={tldrBody} /></div>
+          {(statusLabel || statusText) && (
+            <div style={{ marginTop: '10px', padding: '8px 12px', borderRadius: 'var(--md-sys-shape-corner-medium)', backgroundColor: 'var(--md-sys-color-surface-container)', display: 'flex', alignItems: 'baseline', gap: '8px', font: 'var(--md-sys-typescale-body-medium)', lineHeight: 1.4 }}>
+              {statusLabel && <StatusBadge label={statusLabel} fallbackState={content?.prState || content?.issueState} />}
+              {statusText && <span style={{ color: 'var(--md-sys-color-on-surface)' }}><InlineMarkdown text={statusText} /></span>}
+            </div>
+          )}
         </div>
       </Section>
 
@@ -165,7 +189,7 @@ export function SummaryContent({ summary, content, onExport, notionUrl, exportin
       )}
 
       {/* Export actions */}
-      <div style={{ display: 'flex', gap: '8px', marginTop: '8px', paddingTop: '8px', paddingBottom: '8px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
+      <div class="no-print" style={{ display: 'flex', gap: '8px', marginTop: '8px', paddingTop: '8px', paddingBottom: '8px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
         {onExport && (
           notionUrl ? (
             <a
@@ -250,6 +274,7 @@ export function MetadataHeader({ content, summary, providerName, modelName, onPr
     facebook: { bg: 'var(--md-sys-color-primary-container)', text: 'var(--md-sys-color-on-primary-container)' },
     reddit: { bg: '#FFE0B2', text: '#E65100' },
     twitter: { bg: '#E3F2FD', text: '#1565C0' },
+    github: { bg: '#e1e4e8', text: '#24292e' },
     generic: { bg: 'var(--md-sys-color-surface-container-highest)', text: 'var(--md-sys-color-on-surface-variant)' },
   };
   const badge = badgeColors[content.type] || badgeColors.generic;
@@ -266,9 +291,9 @@ export function MetadataHeader({ content, summary, providerName, modelName, onPr
           fontWeight: 600,
           textTransform: 'uppercase',
         }}>
-          {content.type === 'youtube' ? 'YouTube' : content.type === 'facebook' ? 'Facebook' : content.type === 'reddit' ? 'Reddit' : content.type === 'twitter' ? 'X' : content.type}
+          {content.type === 'youtube' ? 'YouTube' : content.type === 'facebook' ? 'Facebook' : content.type === 'reddit' ? 'Reddit' : content.type === 'twitter' ? 'X' : content.type === 'github' ? 'GitHub' : content.type}
         </span>
-        {content.estimatedReadingTime > 0 && (
+        {content.type !== 'github' && content.estimatedReadingTime > 0 && (
           <span style={{ color: 'var(--md-sys-color-on-surface-variant)', font: 'var(--md-sys-typescale-label-small)' }}>
             {content.estimatedReadingTime} min read
           </span>
@@ -343,6 +368,24 @@ export function MetadataHeader({ content, summary, providerName, modelName, onPr
         )}
         {content.duration && <span>{content.duration}</span>}
         {content.viewCount && <span>{content.viewCount} views</span>}
+        {content.type === 'github' && content.prState && (
+          <span style={{
+            backgroundColor: content.prState === 'merged' ? '#8250df' : content.prState === 'open' ? '#1a7f37' : '#cf222e',
+            color: '#fff', padding: '2px 8px', borderRadius: '12px',
+            font: 'var(--md-sys-typescale-label-small)', fontWeight: 600,
+          }}>
+            {content.prState.charAt(0).toUpperCase() + content.prState.slice(1)}
+          </span>
+        )}
+        {content.type === 'github' && content.issueState && !content.prState && (
+          <span style={{
+            backgroundColor: content.issueState === 'open' ? '#1a7f37' : '#cf222e',
+            color: '#fff', padding: '2px 8px', borderRadius: '12px',
+            font: 'var(--md-sys-typescale-label-small)', fontWeight: 600,
+          }}>
+            {content.issueState.charAt(0).toUpperCase() + content.issueState.slice(1)}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -407,6 +450,7 @@ function Section({ title, defaultOpen = false, children }: { title: string; defa
       <button
         onClick={() => setOpen(!open)}
         title={open ? `Collapse ${title}` : `Expand ${title}`}
+        class="section-toggle"
         style={{
           background: 'none',
           border: 'none',
@@ -419,6 +463,7 @@ function Section({ title, defaultOpen = false, children }: { title: string; defa
           gap: '8px',
           font: 'var(--md-sys-typescale-title-small)',
           color: 'var(--md-sys-color-on-surface)',
+          userSelect: 'text',
         }}
       >
         <span style={{
@@ -429,7 +474,7 @@ function Section({ title, defaultOpen = false, children }: { title: string; defa
         }}>&#9654;</span>
         {title}
       </button>
-      {open && <div style={{ paddingLeft: '4px', paddingBottom: '8px' }}>{children}</div>}
+      <div class="section-content" style={{ paddingLeft: '4px', paddingBottom: '8px', display: open ? 'block' : 'none' }}>{children}</div>
     </div>
   );
 }
@@ -511,6 +556,70 @@ export function downloadMarkdown(summary: SummaryDocument, content: ExtractedCon
   a.download = `${slug}.md`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** Status label → badge color mapping */
+const STATUS_BADGES: Record<string, { bg: string; text: string }> = {
+  // PR statuses
+  'ready to merge': { bg: '#1a7f37', text: '#fff' },
+  'needs attention': { bg: '#bf8700', text: '#fff' },
+  'blocked':        { bg: '#cf222e', text: '#fff' },
+  'open':           { bg: '#57606a', text: '#fff' },
+  'merged':         { bg: '#8250df', text: '#fff' },
+  'closed':         { bg: '#cf222e', text: '#fff' },
+  // Issue statuses
+  'has fix':        { bg: '#1a7f37', text: '#fff' },
+  'confirmed':      { bg: '#bf8700', text: '#fff' },
+  'needs triage':   { bg: '#57606a', text: '#fff' },
+  'stale':          { bg: '#57606a', text: '#fff' },
+};
+
+/** Known status labels to detect at the start of a status line */
+const STATUS_LABELS = Object.keys(STATUS_BADGES).sort((a, b) => b.length - a.length);
+
+/** Split TL;DR text into body and an optional status line (detected by **Status:** pattern) */
+function splitTldrStatus(tldr: string): { body: string; statusLabel: string | null; statusText: string | null } {
+  const match = tldr.match(/\n\n\*\*Status:\*\*\s*(.*?)$/s);
+  if (!match) return { body: tldr, statusLabel: null, statusText: null };
+
+  let rest = match[1].trim();
+  // Try to extract a known status label from the beginning
+  const lower = rest.toLowerCase();
+  for (const label of STATUS_LABELS) {
+    if (lower.startsWith(label)) {
+      const statusLabel = rest.slice(0, label.length);
+      let statusText = rest.slice(label.length).replace(/^\s*[—–\-:]\s*/, '').trim();
+      return { body: tldr.slice(0, match.index!).trim(), statusLabel, statusText: statusText || null };
+    }
+  }
+  // No known label — fall back to raw GitHub state words
+  const stateMatch = rest.match(/^(Open|Closed|Merged)\s*[—–\-:]\s*/i);
+  if (stateMatch) {
+    return { body: tldr.slice(0, match.index!).trim(), statusLabel: stateMatch[1], statusText: rest.slice(stateMatch[0].length).trim() || null };
+  }
+  // Unknown format — show entire text with no badge
+  return { body: tldr.slice(0, match.index!).trim(), statusLabel: null, statusText: rest };
+}
+
+function StatusBadge({ label, fallbackState }: { label: string | null; fallbackState?: string }) {
+  const key = (label || fallbackState || 'open').toLowerCase();
+  const c = STATUS_BADGES[key] || STATUS_BADGES.open;
+  const display = label || (fallbackState ? fallbackState.charAt(0).toUpperCase() + fallbackState.slice(1) : 'Open');
+
+  return (
+    <span style={{
+      backgroundColor: c.bg,
+      color: c.text,
+      padding: '2px 8px',
+      borderRadius: '12px',
+      font: 'var(--md-sys-typescale-label-small)',
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      flexShrink: 0,
+    }}>
+      {display}
+    </span>
+  );
 }
 
 function formatDate(dateStr: string): string {

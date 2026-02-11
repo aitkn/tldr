@@ -58,7 +58,7 @@ export async function summarize(
     mimeType: fi.mimeType,
   }));
   const hasImages = !!(imageContents?.length);
-  let systemPrompt = getSystemPrompt(detailLevel, language, languageExcept, hasImages, content.wordCount);
+  let systemPrompt = getSystemPrompt(detailLevel, language, languageExcept, hasImages, content.wordCount, content.type, content.githubPageType);
   if (userInstructions) {
     systemPrompt += `\n\nAdditional user instructions: ${userInstructions}`;
   }
@@ -72,9 +72,9 @@ export async function summarize(
     if (signal?.aborted) throw new Error('Summarization cancelled');
     try {
       if (chunks.length === 1) {
-        return await oneShotSummarize(provider, content, systemPrompt, imageContents, imageUrlList, signal);
+        return await oneShotSummarize(provider, content, systemPrompt, detailLevel, imageContents, imageUrlList, signal);
       } else {
-        return await rollingContextSummarize(provider, content, chunks, systemPrompt, imageContents, imageUrlList, signal);
+        return await rollingContextSummarize(provider, content, chunks, systemPrompt, detailLevel, imageContents, imageUrlList, signal);
       }
     } catch (err) {
       // Don't retry cancellation, text responses, no-content, or image requests
@@ -95,11 +95,12 @@ async function oneShotSummarize(
   provider: LLMProvider,
   content: ExtractedContent,
   systemPrompt: string,
+  detailLevel: 'brief' | 'standard' | 'detailed',
   images?: ImageContent[],
   imageUrlList?: { url: string; alt: string }[],
   signal?: AbortSignal,
 ): Promise<SummaryDocument> {
-  let userPrompt = getSummarizationPrompt(content);
+  let userPrompt = getSummarizationPrompt(content, detailLevel);
   if (images?.length && imageUrlList?.length) {
     userPrompt += formatImageUrlListing(imageUrlList);
   }
@@ -118,6 +119,7 @@ async function rollingContextSummarize(
   content: ExtractedContent,
   chunks: string[],
   systemPrompt: string,
+  detailLevel: 'brief' | 'standard' | 'detailed',
   images?: ImageContent[],
   imageUrlList?: { url: string; alt: string }[],
   signal?: AbortSignal,
@@ -139,7 +141,7 @@ async function rollingContextSummarize(
     let userPrompt = '';
 
     if (i === 0) {
-      userPrompt = getSummarizationPrompt(chunkContent);
+      userPrompt = getSummarizationPrompt(chunkContent, detailLevel);
       if (images?.length && imageUrlList?.length) {
         userPrompt += formatImageUrlListing(imageUrlList);
       }
@@ -283,6 +285,18 @@ function buildPlaceholders(content: ExtractedContent, imageUrlList?: { url: stri
   if (content.type === 'youtube') {
     const cleanUrl = content.url.replace(/[&?]t=\d+s?/g, '');
     replacements.push(['{{VIDEO_URL}}', cleanUrl]);
+  }
+  // GitHub file references
+  if (content.type === 'github') {
+    const fileMapMatch = content.content.match(/<!-- FILE_MAP: ({.*?}) -->/);
+    if (fileMapMatch) {
+      try {
+        const fileMap = JSON.parse(fileMapMatch[1]) as Record<string, string>;
+        for (const [n, url] of Object.entries(fileMap)) {
+          replacements.push([`{{FILE_${n}}}`, url]);
+        }
+      } catch { /* skip malformed */ }
+    }
   }
   return replacements;
 }

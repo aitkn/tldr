@@ -5,7 +5,7 @@ const LANGUAGE_NAMES: Record<string, string> = {
   pt: 'Portuguese', ru: 'Russian', zh: 'Chinese', ja: 'Japanese', ko: 'Korean',
 };
 
-export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', language: string, languageExcept: string[] = [], imageAnalysisEnabled = false, wordCount = 1500): string {
+export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', language: string, languageExcept: string[] = [], imageAnalysisEnabled = false, wordCount = 1500, contentType?: string, githubPageType?: string): string {
   const targetLang = LANGUAGE_NAMES[language] || language;
   const exceptLangs = languageExcept
     .map((code) => LANGUAGE_NAMES[code] || code)
@@ -62,7 +62,7 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
     medium: {
       tldr: '2-3 crisp sentences',
       takeaways: '5-7',
-      takeawayFormat: '"**Bold label** — " then the explanation, e.g. "**Currency distortion** — the ruble is deliberately undervalued…"',
+      takeawayFormat: '"**Bold label** — " then the explanation',
       summary: 'comprehensive but focused. Use ### subheadings to break into 2-4 sections when longer than one paragraph; keep paragraphs to 3-4 sentences',
       conclusion: '2-3 sentences',
       quotes: 'Include actual direct quotes from the text. Use an empty array if none found.',
@@ -79,7 +79,7 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
     long: {
       tldr: '2-3 crisp sentences',
       takeaways: '7-9',
-      takeawayFormat: '"**Bold label** — " then the explanation, e.g. "**Currency distortion** — the ruble is deliberately undervalued…"',
+      takeawayFormat: '"**Bold label** — " then the explanation',
       summary: 'comprehensive and structured. Use ### subheadings to break into 3-5 sections; keep paragraphs to 3-4 sentences',
       conclusion: '2-3 sentences',
       quotes: 'Include 3-5 actual direct quotes from the text. Use an empty array if none found.',
@@ -147,14 +147,106 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
     },
   })[size];
 
-  // factCheck rules — shared body for standard/detailed, null for brief
+  // Content-type-aware field exclusions
+  const isGitHub = contentType === 'github';
+  const skipQuotes = isGitHub;
+  const skipFactCheck = isGitHub;
+
+  // Apply GitHub-specific field guidelines — replace generic instructions with page-type-specific ones
+  // (moves field overrides from user prompt into system prompt for clarity and token savings)
+  let gProsCons = d.prosCons;
+  let gComments = d.comments;
+  let gExtraSections = d.extraSections;
+  let gConclusion: string | null = null; // null = use default `d.conclusion`
+
+  if (isGitHub && githubPageType) {
+    switch (githubPageType) {
+      case 'pr':
+        gProsCons = detailLevel === 'detailed'
+          ? 'Use as "Strengths & Concerns" if the review warrants it. Set to null otherwise.'
+          : 'Set to null.';
+        gComments = detailLevel === 'brief'
+          ? 'Set to null.'
+          : 'Include notable review feedback and discussion points. Human comments carry significantly more weight than bot comments — always include them. Recent comments carry more weight than older ones.';
+        gExtraSections = detailLevel === 'brief'
+          ? 'Set to null.'
+          : detailLevel === 'standard'
+            ? 'FIRST section must be "Current Status" — state whether the PR is ready to merge, needs changes, or is blocked, and what action is needed next based on the latest comments. Then include "Changes Overview" summarizing what changed and why.'
+            : 'FIRST section must be "Current Status" — state whether the PR is ready to merge, needs changes, or is blocked, and what action is needed next based on the latest comments. Then include "Changes Overview", "Review Status", "Key Review Feedback", and "Discussion Highlights".';
+        break;
+      case 'issue':
+        gProsCons = 'Set to null.';
+        gComments = detailLevel === 'brief'
+          ? 'Set to null.'
+          : 'Include notable discussion points and proposed solutions.';
+        gExtraSections = detailLevel === 'brief'
+          ? 'Set to null.'
+          : detailLevel === 'standard'
+            ? 'Include "Status & Labels" summarizing current state. If the issue describes a bug, include "Reproduction Steps".'
+            : 'Include "Status & Labels", "Reproduction Steps" (if bug). Also include "Proposed Solutions" and "Discussion Highlights".';
+        break;
+      case 'code':
+        gProsCons = detailLevel === 'detailed'
+          ? 'Use as "Strengths & Concerns" to highlight code quality issues, if warranted. Set to null otherwise.'
+          : 'Set to null.';
+        gComments = 'Set to null.';
+        gConclusion = 'Overall code quality assessment — note complexity, maintainability, error handling quality, and any structural concerns a senior developer would flag.';
+        gExtraSections = detailLevel === 'brief'
+          ? `Include "Key Components" — list non-trivial classes and global functions with [L42]({{FILE_1}}#L42) line links. Names only, no descriptions needed.`
+          : detailLevel === 'standard'
+            ? `Include these sections:
+  - "Key Components" — for each non-trivial class or function, write 1-2 sentences in plain language explaining what it actually does — its purpose and behavior, not just its name. Include [L42]({{FILE_1}}#L42) line links. Focus on aggregated meaning: explain the role each component plays in the overall design rather than just listing names (an IDE can do that).
+  - "Potential Issues" — ANALYZE THE ACTUAL CODE for problems a senior developer would catch on a fast scan: missing error handling, bare except clauses, resource leaks (files/connections not closed), potential None/null dereferences, obvious logic errors, hardcoded values that should be configurable, security concerns (SQL injection, hardcoded secrets, unsafe deserialization), performance anti-patterns (N+1 patterns, unnecessary loops). Link each issue to the specific line. Do NOT just list TODO/FIXME comments — actually read the code.
+  - "TODOs" — items from TODO/FIXME/HACK/XXX comments with line links. Set to null if none found.`
+            : `Include these sections:
+  - "Key Components" — for each non-trivial class or function, write 3-4 sentences covering: its purpose, how it works internally, and its role in the overall architecture. For classes, list main non-trivial public methods with descriptions that go beyond repeating the method name — explain what actually happens, side effects, or notable behavior (e.g. not "saves data" for save(), but what it persists, how, and any non-obvious behavior). Include [L42]({{FILE_1}}#L42) line links. Aggregate knowledge: help the reader understand the code's architecture and design intent, not just its inventory.
+  - "Potential Issues" — ANALYZE THE ACTUAL CODE for problems a senior developer would catch: missing error handling, bare except clauses, resource leaks (files/connections not closed), potential None/null dereferences, obvious logic errors, type safety concerns, hardcoded magic numbers/strings, security concerns (SQL injection, hardcoded secrets, unsafe deserialization, path traversal), performance anti-patterns (N+1 patterns, unnecessary allocations in loops, missing caching). Link each issue to the specific line. Do NOT just list TODO/FIXME comments — actually read the code.
+  - "TODOs" — items from TODO/FIXME/HACK/XXX comments with line links. Set to null if none found.
+  - "Dependencies" — key imported libraries/modules and their roles.`;
+        break;
+      case 'repo':
+        gProsCons = 'Set to null.';
+        gComments = 'Set to null.';
+        gExtraSections = detailLevel === 'brief'
+          ? 'Set to null.'
+          : detailLevel === 'standard'
+            ? 'Include "Key Features" listing main capabilities and "Tech Stack".'
+            : 'Include "Key Features", "Tech Stack", and "Getting Started" with setup instructions from the README.';
+        break;
+      case 'commit':
+        gProsCons = 'Set to null.';
+        gComments = 'Set to null.';
+        gExtraSections = detailLevel === 'brief'
+          ? 'Set to null.'
+          : 'Include "Changes Overview" describing what was changed and why. Use {{FILE_N}}#L123 references when discussing specific changes.';
+        break;
+      case 'release':
+        gProsCons = 'Set to null.';
+        gComments = 'Set to null.';
+        gExtraSections = detailLevel === 'brief'
+          ? 'Set to null.'
+          : detailLevel === 'standard'
+            ? 'Include "What\'s New" and "Breaking Changes" (if any).'
+            : 'Include "What\'s New", "Breaking Changes" (if any), "Bug Fixes", and "Migration Notes" (if applicable).';
+        break;
+    }
+  }
+
+  // Skip fields from schema+guidelines when they're just "Set to null"
+  const skipProsCons = gProsCons === 'Set to null.';
+  const skipComments = gComments === 'Set to null.';
+  const skipExtraSections = gExtraSections === 'Set to null.';
+
+  // factCheck rules — shared body for standard/detailed, null for brief, skipped for GitHub
   const factCheckPreamble = d.factCheck === 'detailed'
     ? 'Actively look for verifiable factual claims to analyze. Include when'
     : 'Include ONLY when';
 
-  const factCheckGuideline = d.factCheck === null
-    ? '- "factCheck": Set to null.'
-    : `- "factCheck" — ${factCheckPreamble} the content makes specific, verifiable factual claims that matter to the reader's understanding (statistics, scientific claims, historical assertions, policy claims, attributed quotes). Set to null for: essays, opinion pieces, philosophical writing, personal narratives, advice/self-help, tutorials, reviews, humor, creative fiction, poetry, or any content where claims are primarily subjective, experiential, or use facts only as passing illustrations. The test: "Would getting a fact wrong here actually mislead the reader on something important?" If not, set to null. When included, use a structured markdown list format — one bullet per claim examined. Each bullet must follow this pattern: **"Claim quote or paraphrase"** — [icon] [verdict], then a brief explanation. Use only the icon emoji (✅ ⚠️ ❌ 🔍) followed by the verdict word translated to the summary language (e.g. in Russian: ✅ Подтверждено, ⚠️ Спорно, ❌ Ложь, 🔍 Непроверяемо). Example:
+  const factCheckGuideline = skipFactCheck
+    ? ''
+    : d.factCheck === null
+      ? '- "factCheck": Set to null.'
+      : `- "factCheck" — ${factCheckPreamble} the content makes specific, verifiable factual claims that matter to the reader's understanding (statistics, scientific claims, historical assertions, policy claims, attributed quotes). Set to null for: essays, opinion pieces, philosophical writing, personal narratives, advice/self-help, tutorials, reviews, humor, creative fiction, poetry, or any content where claims are primarily subjective, experiential, or use facts only as passing illustrations. The test: "Would getting a fact wrong here actually mislead the reader on something important?" If not, set to null. When included, use a structured markdown list format — one bullet per claim examined. Each bullet must follow this pattern: **"Claim quote or paraphrase"** — [icon] [verdict], then a brief explanation. Use only the icon emoji (✅ ⚠️ ❌ 🔍) followed by the verdict word translated to the summary language (e.g. in Russian: ✅ Подтверждено, ⚠️ Спорно, ❌ Ложь, 🔍 Непроверяемо). Example:
   - **"Crime dropped 77% in Memphis"** — 🔍 Unverifiable; no public data supports this specific figure
   - **"Maduro indicted by SDNY in 2020"** — ✅ Verified; real indictment for narco-terrorism
   Focus on the most significant claims (5-8 max). Do NOT just echo mainstream consensus; focus on verifiable facts. Flag unsupported generalizations, cherry-picked data, or missing important context.
@@ -167,65 +259,88 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
   CRITICAL — knowledge cutoff rule: Use ❌ False ONLY when you have definitive knowledge that contradicts the claim (e.g. wrong date for a historical event, misattributed quote, incorrect scientific fact). If a claim describes an event you have NO information about — especially anything recent — you MUST use 🔍 Unverifiable, NEVER ❌ False. "I have no record of this" does NOT mean it didn't happen. Absence of evidence is not evidence of absence. When in doubt, always default to 🔍 Unverifiable.`;
 
   // Quotes extra instructions (translation + timestamps) — only when quotes are included
-  const quotesExtra = d.quotes === 'Set to null.' ? '' : ' When the summary language differs from the source language, append a translation in parentheses after each quote, e.g. "Original quote" (Translation). If you include a timestamp, always make it a clickable markdown link — never a bare number.';
+  const quotesExtra = (skipQuotes || d.quotes === 'Set to null.') ? '' : ' When the summary language differs from the source language, append a translation in parentheses after each quote, e.g. "Original quote" (Translation). If you include a timestamp, always make it a clickable markdown link — never a bare number.';
 
-  // Mermaid section — rule text comes from config, syntax rules appended when diagrams are allowed
-  const mermaidGuideline = detailLevel === 'brief'
+  // Mermaid section — skip for GitHub non-code types; syntax rules appended when diagrams are allowed
+  const mermaidGuideline = (isGitHub && githubPageType !== 'code')
+    ? ''
+    : detailLevel === 'brief'
     ? `- ${d.mermaid}`
     : `- ${d.mermaid}
 - MERMAID SYNTAX (MANDATORY): Node IDs must be ONLY letters or digits (A, B, C1, node1) — NO colons, dashes, dots, spaces, or any special characters in IDs. ALL display text goes inside brackets: A["Label with special:chars"], B{"Decision?"}. Edge labels use |label| syntax. Always use \`flowchart TD\` or \`flowchart LR\`, never \`graph\`. Example: \`flowchart TD\\n  A["Start"] --> B{"Check?"}\\n  B -->|Yes| C["Done"]\``;
 
   const today = new Date().toISOString().slice(0, 10);
 
-  return `You are an expert content summarizer. Today's date is ${today}. ${langInstruction}
+  // Build JSON schema — omit fields that are always null for the content type
+  const schema: string[] = [
+    '"tldr": "High-level overview of the content."',
+    '"keyTakeaways": ["Key point 1", "Key point 2", ...]',
+    '"summary": "Main summary of the content."',
+  ];
+  if (!skipQuotes) schema.push('"notableQuotes": ["Direct quote 1", "Direct quote 2", ...]');
+  schema.push('"conclusion": "Main conclusion or final thoughts."');
+  if (!skipProsCons) schema.push('"prosAndCons": { "pros": ["Pro 1", ...], "cons": ["Con 1", ...] }');
+  if (!skipFactCheck) schema.push('"factCheck": "Analysis of factual accuracy..."');
+  if (!skipComments) schema.push('"commentsHighlights": ["Notable comment/discussion point 1", ...]');
+  schema.push('"relatedTopics": ["Related topic 1", "Related topic 2", ...]');
+  if (!skipExtraSections) schema.push('"extraSections": [{"title": "Section Title", "content": "section content"}]');
+  schema.push('"tags": ["tag1", "tag2", ...]', '"sourceLanguage": "xx"', '"summaryLanguage": "xx"');
+  if (!isGitHub) {
+    schema.push('"translatedTitle": "Title in summary language or null"', '"inferredTitle": "Descriptive title or null"',
+      '"inferredAuthor": "Author name or null"', '"inferredPublishDate": "YYYY-MM-DD or null"');
+  }
+  const schemaFields = schema.map(f => `  ${f}`).join(',\n');
+
+  // Build guidelines
+  const guidelines: string[] = [
+    `- "tldr": ${d.tldr}. Each sentence standalone — never one compound run-on. Bold the most critical terms.`,
+    `- "keyTakeaways": ${d.takeaways} items. Each: ${d.takeawayFormat}.`,
+    `- "summary": ${d.summary}. Bold key terms, names, and statistics throughout.`,
+  ];
+  if (!skipQuotes) guidelines.push(`- "notableQuotes": ${d.quotes}${quotesExtra}`);
+  guidelines.push(`- "conclusion": ${gConclusion || `${d.conclusion}.`}`);
+  if (!skipProsCons) guidelines.push(`- "prosAndCons": ${gProsCons}`);
+  if (factCheckGuideline) guidelines.push(factCheckGuideline);
+  if (!skipComments) guidelines.push(`- "commentsHighlights": ${gComments}`);
+  guidelines.push(`- "relatedTopics": ${d.relatedTopics} topics.`);
+  if (!skipExtraSections) guidelines.push(`- "extraSections": ${gExtraSections}`);
+  guidelines.push(
+    `- "tags": ${d.tags} short, lowercase tags.`,
+    `- "sourceLanguage" must be the ISO 639-1 code of the original content language (e.g. "en", "ru", "fr").`,
+    `- "summaryLanguage" must be the ISO 639-1 code of the language you wrote the summary in (e.g. "en", "ru"). REMINDER: Re-read the language instruction at the top of this prompt — if it says to NOT translate certain source languages, you MUST obey. Write summaryLanguage to match the language you actually used.`,
+  );
+  if (!isGitHub) {
+    guidelines.push(
+      `- "translatedTitle" — if sourceLanguage differs from summaryLanguage, provide the title translated to the summary language. Set to null if no translation was needed.`,
+      `- "inferredTitle" — if the title metadata is marked as MISSING, create a concise, descriptive title (5-10 words) that captures the main topic. Set to null if a real title was already provided.`,
+      `- "inferredAuthor" — if the author metadata is marked as MISSING, try to infer the author from the content text (byline, signature, mentions, etc.). Set to null if you cannot determine it.`,
+      `- "inferredPublishDate" — if the publish date metadata is marked as MISSING, try to infer the date from the content text (date references, timestamps, etc.) in YYYY-MM-DD format. Set to null if you cannot determine it.`,
+    );
+  }
+  guidelines.push(`- All text fields support full markdown formatting (bold, italic, links, lists, etc.). Use it wherever it improves clarity.`);
+  if (mermaidGuideline) guidelines.push(mermaidGuideline);
+  guidelines.push(`- ${d.lengthRule} Each field should add unique value — do not restate the same points across fields.`);
+  if (!isGitHub) {
+    guidelines.push(`- IMPORTANT: The content may contain mature, explicit, or sensitive topics (medical, psychological, sexual health, etc.). You MUST still summarize it fully and accurately — never refuse to summarize. Keep the summary professional and clinical in tone — do not reproduce explicit language or graphic details. Focus on the key ideas, arguments, and conclusions.`);
+  }
+  guidelines.push(
+    `- IMPORTANT: If the provided text contains no meaningful content — e.g. it is a UI dump, login page, error page, navigation menu, cookie consent, paywall, or app interface markup rather than an actual article or document — respond with ONLY this JSON instead: {"noContent": true, "reason": "Brief explanation of why there is no content to summarize"}. Do NOT attempt to summarize interface elements or boilerplate.`,
+    `- IMPORTANT: If the user's additional instructions explicitly ask you NOT to summarize, or say they only want to ask questions / chat about the content, RESPECT their request. Respond with ONLY this JSON: {"noSummary": true, "message": "Your conversational response here"}. Do NOT produce a summary in this case.`,
+  );
+
+  const role = isGitHub ? 'an expert software engineer and content summarizer' : 'an expert content summarizer';
+
+  return `You are ${role}. Today's date is ${today}. ${langInstruction}
 
 Content: ~${wordCount.toLocaleString()} words → classified as "${size}" (thresholds: short <500, medium 500-3000, long 3000+). The ranges below are tuned for this size tier. If the content is near a threshold boundary, blend smoothly — do not produce drastically different output for 490 vs 510 words.
 
 You MUST respond with valid JSON matching this exact structure (no markdown code fences, just raw JSON):
 {
-  "tldr": "High-level overview of the content.",
-  "keyTakeaways": ["Key point 1", "Key point 2", ...],
-  "summary": "Main summary of the content.",
-  "notableQuotes": ["Direct quote 1", "Direct quote 2", ...],
-  "conclusion": "Main conclusion or final thoughts.",
-  "prosAndCons": { "pros": ["Pro 1", ...], "cons": ["Con 1", ...] },
-  "factCheck": "Analysis of factual accuracy...",
-  "commentsHighlights": ["Notable comment/discussion point 1", ...],
-  "relatedTopics": ["Related topic 1", "Related topic 2", ...],
-  "extraSections": [{"title": "Section Title", "content": "section content"}],
-  "tags": ["tag1", "tag2", ...],
-  "sourceLanguage": "xx",
-  "summaryLanguage": "xx",
-  "translatedTitle": "Title in summary language or null",
-  "inferredTitle": "Descriptive title or null",
-  "inferredAuthor": "Author name or null",
-  "inferredPublishDate": "YYYY-MM-DD or null"
+${schemaFields}
 }
 
 Guidelines:
-- "tldr": ${d.tldr}. Each sentence standalone — never one compound run-on. Bold the most critical terms.
-- "keyTakeaways": ${d.takeaways} items. Each: ${d.takeawayFormat}.
-- "summary": ${d.summary}. Bold key terms, names, and statistics throughout.
-- "notableQuotes": ${d.quotes}${quotesExtra}
-- "conclusion": ${d.conclusion}.
-- "prosAndCons": ${d.prosCons}
-${factCheckGuideline}
-- "commentsHighlights": ${d.comments}
-- "relatedTopics": ${d.relatedTopics} topics.
-- "extraSections": ${d.extraSections}
-- "tags": ${d.tags} short, lowercase tags.
-- "sourceLanguage" must be the ISO 639-1 code of the original content language (e.g. "en", "ru", "fr").
-- "summaryLanguage" must be the ISO 639-1 code of the language you wrote the summary in (e.g. "en", "ru"). REMINDER: Re-read the language instruction at the top of this prompt — if it says to NOT translate certain source languages, you MUST obey. Write summaryLanguage to match the language you actually used.
-- "translatedTitle" — if sourceLanguage differs from summaryLanguage, provide the title translated to the summary language. Set to null if no translation was needed.
-- "inferredTitle" — if the title metadata is marked as MISSING, create a concise, descriptive title (5-10 words) that captures the main topic. Set to null if a real title was already provided.
-- "inferredAuthor" — if the author metadata is marked as MISSING, try to infer the author from the content text (byline, signature, mentions, etc.). Set to null if you cannot determine it.
-- "inferredPublishDate" — if the publish date metadata is marked as MISSING, try to infer the date from the content text (date references, timestamps, etc.) in YYYY-MM-DD format. Set to null if you cannot determine it.
-- All text fields support full markdown formatting (bold, italic, links, lists, etc.). Use it wherever it improves clarity.
-${mermaidGuideline}
-- ${d.lengthRule} Each field should add unique value — do not restate the same points across fields.
-- IMPORTANT: The content may contain mature, explicit, or sensitive topics (medical, psychological, sexual health, etc.). You MUST still summarize it fully and accurately — never refuse to summarize. Keep the summary professional and clinical in tone — do not reproduce explicit language or graphic details. Focus on the key ideas, arguments, and conclusions.
-- IMPORTANT: If the provided text contains no meaningful content — e.g. it is a UI dump, login page, error page, navigation menu, cookie consent, paywall, or app interface markup rather than an actual article or document — respond with ONLY this JSON instead: {"noContent": true, "reason": "Brief explanation of why there is no content to summarize"}. Do NOT attempt to summarize interface elements or boilerplate.
-- IMPORTANT: If the user's additional instructions explicitly ask you NOT to summarize, or say they only want to ask questions / chat about the content, RESPECT their request. Respond with ONLY this JSON: {"noSummary": true, "message": "Your conversational response here"}. Do NOT produce a summary in this case.`
+${guidelines.join('\n')}`
   + (imageAnalysisEnabled ? `
 
 Image Analysis Instructions:
@@ -236,11 +351,12 @@ Image Analysis Instructions:
 - Do NOT request images if the attached images already cover the key visuals.` : '');
 }
 
-export function getSummarizationPrompt(content: ExtractedContent): string {
+export function getSummarizationPrompt(content: ExtractedContent, detailLevel: 'brief' | 'standard' | 'detailed' = 'standard'): string {
   const isDiscussion = content.type === 'reddit' || content.type === 'twitter';
   const contentLabel = content.type === 'youtube' ? 'YouTube video'
     : content.type === 'reddit' ? 'Reddit discussion'
     : content.type === 'twitter' ? 'X thread'
+    : content.type === 'github' ? getGitHubContentLabel(content)
     : 'article/page';
 
   let prompt = `Summarize the following ${contentLabel}.\n\n`;
@@ -272,6 +388,14 @@ export function getSummarizationPrompt(content: ExtractedContent): string {
 - "notableQuotes" should be actual quotes from commenters, not just the original poster.\n\n`;
   }
 
+  // GitHub-specific instructions
+  if (content.type === 'github' && content.githubPageType) {
+    if (content.content.includes('<!-- FILE_MAP:')) {
+      prompt += getGitHubFileRefInstructions(content);
+    }
+    prompt += getGitHubContextInstructions(content.githubPageType, detailLevel);
+  }
+
   prompt += `---\n\n**Content:**\n\n${content.content}\n`;
 
   // For discussion types, comments are already embedded in the content
@@ -300,4 +424,75 @@ Now continue summarizing the next portion below. Integrate it with the context a
 
 export function getFinalChunkPrompt(): string {
   return `This is the FINAL portion of the content. Produce the complete, final structured JSON summary incorporating all previous context and this last section.`;
+}
+
+// ─── GitHub-specific prompt helpers ────────────────────────────────────
+
+function getGitHubContentLabel(content: ExtractedContent): string {
+  switch (content.githubPageType) {
+    case 'pr': return 'GitHub Pull Request';
+    case 'issue': return 'GitHub Issue';
+    case 'code': return 'GitHub code file';
+    case 'repo': return 'GitHub repository';
+    case 'commit': return 'GitHub commit';
+    case 'release': return 'GitHub release';
+    default: return 'GitHub page';
+  }
+}
+
+/** FILE_MAP reference instructions — appended to user prompt (content-dependent) */
+function getGitHubFileRefInstructions(content: ExtractedContent): string {
+  const fileMapMatch = content.content.match(/<!-- FILE_MAP: ({.*?}) -->/);
+  if (!fileMapMatch) return '';
+  try {
+    const fileMap = JSON.parse(fileMapMatch[1]) as Record<string, string>;
+    const fileLines = Object.entries(fileMap).map(([n, url]) => {
+      const path = url.split('/blob/')[1]?.replace(/^[^/]+\//, '') || url;
+      return `- {{FILE_${n}}} = ${path}`;
+    });
+    return `\n**FILE REFERENCES:** Use {{FILE_N}} aliases for line links.
+Available files:
+${fileLines.join('\n')}
+
+When referencing specific lines, use: [L123]({{FILE_N}}#L123)
+When referencing line ranges: [L123-L130]({{FILE_N}}#L123-L130)
+Explain code in English, reference identifiers with \`backticks\`.\n\n`;
+  } catch { return ''; }
+}
+
+/** GitHub contextual instructions — appended to user prompt (field overrides are in system prompt) */
+function getGitHubContextInstructions(
+  pageType: NonNullable<ExtractedContent['githubPageType']>,
+  detailLevel: 'brief' | 'standard' | 'detailed',
+): string {
+  const parts: string[] = [];
+
+  switch (pageType) {
+    case 'pr':
+      parts.push('- **COMMENT WEIGHTING:** Human comments are FAR more important than bot comments. The most recent human comment often determines the current state of the PR — surface it prominently. Repo owners/maintainers carry the most weight.');
+      parts.push('- Comments tagged [BOT] are from automated tools — summarize their findings briefly, don\'t quote their boilerplate.'
+        + (detailLevel === 'brief' ? ' Skip code diffs/blocks inside bot comments entirely, focus only on their prose conclusions.' : ''));
+      parts.push('- Comments tagged [AUTHOR] are from the PR author — highlight their explanations and responses.');
+      parts.push('- **STATUS FOCUS:** The TL;DR must end with the current status on a separate line (use \\n\\n). Start with one of these exact labels: "Ready to merge" (all reviews pass, no unresolved concerns), "Needs attention" (has unresolved review comments or requested changes), "Blocked" (waiting on specific action/dependency), or "Open" (just opened, no reviews yet). Format: "**Status:** Label — brief explanation." Example: "**Status:** Needs attention — maintainer requested verification of recursive edge case." The conclusion must focus on where this PR stands NOW and what needs to happen next — not just a general assessment.');
+      parts.push('- Use {{FILE_N}}#L123 references when discussing specific code changes.');
+      break;
+    case 'issue':
+      parts.push('- **COMMENT WEIGHTING:** Human comments are more important than bot comments. Recent comments carry more weight — they reflect the current state of the issue.');
+      parts.push('- Comments tagged [BOT] are from automated tools — summarize briefly.'
+        + (detailLevel === 'brief' ? ' Skip code diffs/blocks inside bot comments entirely.' : ''));
+      parts.push('- Comments tagged [AUTHOR] are from the issue author — highlight context they provide.');
+      parts.push('- **STATUS FOCUS:** The TL;DR must end with the current status on a separate line (use \\n\\n). Start with one of these exact labels: "Has fix" (PR or workaround available), "Confirmed" (reproduced/acknowledged), "Needs triage" (new, no response yet), or "Stale" (no activity). Format: "**Status:** Label — brief explanation."');
+      break;
+    case 'code':
+      if (detailLevel === 'brief') {
+        parts.push('- Format key components as: [L15]({{FILE_1}}#L15): `class ClassName`');
+      } else {
+        parts.push('- Format line-linked items as: [L42]({{FILE_1}}#L42): TODO — Description');
+        parts.push('- Format key components as: [L15]({{FILE_1}}#L15): `class ClassName` — Plain language description of what it does');
+      }
+      break;
+  }
+
+  if (parts.length === 0) return '';
+  return '\n**GitHub-specific instructions:**\n' + parts.join('\n') + '\n';
 }
