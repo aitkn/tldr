@@ -151,19 +151,21 @@ export function SummaryContent({ summary, content, onExport, notionUrl, exportin
       {/* Related Topics */}
       {summary.relatedTopics.length > 0 && (
         <Section title="Related Topics">
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          <div>
             {summary.relatedTopics.map((topic, i) => (
               <a
                 key={i}
                 href={`https://www.google.com/search?q=${encodeURIComponent(topic)}`}
                 style={{
-                  backgroundColor: 'var(--md-sys-color-primary-container)',
-                  color: 'var(--md-sys-color-on-primary-container)',
+                  display: 'inline-block',
+                  backgroundColor: '#e8edf8',
+                  color: '#1a3c8a',
                   padding: '4px 12px',
-                  borderRadius: 'var(--md-sys-shape-corner-medium)',
-                  font: 'var(--md-sys-typescale-label-small)',
+                  borderRadius: '8px',
+                  fontSize: '13px',
                   textDecoration: 'none',
                   cursor: 'pointer',
+                  margin: '0 6px 6px 0',
                 }}
               >
                 {topic}
@@ -175,14 +177,16 @@ export function SummaryContent({ summary, content, onExport, notionUrl, exportin
 
       {/* Tags */}
       {summary.tags.length > 0 && (
-        <div style={{ marginTop: '12px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+        <div style={{ marginTop: '12px' }}>
           {summary.tags.map((tag, i) => (
             <span key={i} style={{
-              backgroundColor: 'var(--md-sys-color-surface-container-highest)',
-              color: 'var(--md-sys-color-on-surface-variant)',
+              display: 'inline-block',
+              backgroundColor: '#e8e8ec',
+              color: '#5f6066',
               padding: '2px 10px',
-              borderRadius: 'var(--md-sys-shape-corner-small)',
-              font: 'var(--md-sys-typescale-label-small)',
+              borderRadius: '6px',
+              fontSize: '12px',
+              margin: '0 4px 4px 0',
             }}>
               #{tag}
             </span>
@@ -380,7 +384,7 @@ export function MetadataHeader({ content, summary, providerName, modelName, onPr
       ) : null}
 
       <h2 style={{ font: 'var(--md-sys-typescale-title-medium)', lineHeight: 1.3, margin: '4px 0', color: 'var(--md-sys-color-on-surface)' }}>
-        {content.title || summary?.translatedTitle || summary?.inferredTitle || ''}
+        {summary?.translatedTitle || content.title || summary?.inferredTitle || ''}
       </h2>
 
       <div style={{ font: 'var(--md-sys-typescale-body-small)', color: 'var(--md-sys-color-on-surface-variant)', display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
@@ -519,7 +523,7 @@ function summaryToMarkdown(summary: SummaryDocument, content: ExtractedContent |
   const lines: string[] = [];
 
   if (content) {
-    const displayTitle = content.title || summary.translatedTitle || summary.inferredTitle || 'Untitled';
+    const displayTitle = summary.translatedTitle || content.title || summary.inferredTitle || 'Untitled';
     lines.push(`# ${displayTitle}`, '');
     const meta: string[] = [];
     if (content.author || summary.inferredAuthor) meta.push(`**Author:** ${content.author || summary.inferredAuthor}`);
@@ -572,12 +576,18 @@ function summaryToMarkdown(summary: SummaryDocument, content: ExtractedContent |
   }
 
   if (summary.relatedTopics.length > 0) {
-    lines.push('## Related Topics', '', summary.relatedTopics.join(', '), '');
+    lines.push('## Related Topics', '', summary.relatedTopics.map(t => `[${t}](https://www.google.com/search?q=${encodeURIComponent(t)})`).join(' | '), '');
   }
 
   if (summary.tags.length > 0) {
     lines.push('---', '', summary.tags.map((t) => `#${t}`).join(' '), '');
   }
+
+  if (content?.url) {
+    lines.push('---', '', `[Original source](${content.url})`, '');
+  }
+
+  lines.push(`*Generated with [TL;DR](https://chromewebstore.google.com/detail/pikdhogjjbaakcpedmahckhmajdgdeon)*`);
 
   return lines.join('\n');
 }
@@ -586,7 +596,7 @@ export function downloadMarkdown(summary: SummaryDocument, content: ExtractedCon
   const md = summaryToMarkdown(summary, content);
   const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const slug = (content?.title || summary.translatedTitle || summary.inferredTitle || 'summary').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 80);
+  const slug = (summary.translatedTitle || content?.title || summary.inferredTitle || 'summary').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 80);
   const a = document.createElement('a');
   a.href = url;
   a.download = `${slug}.md`;
@@ -594,10 +604,90 @@ export function downloadMarkdown(summary: SummaryDocument, content: ExtractedCon
   URL.revokeObjectURL(url);
 }
 
+/** Convert a live-DOM SVG to PNG by replacing foreignObject elements with SVG <text>,
+ *  reading computed styles from the live DOM. foreignObject HTML can't be rendered
+ *  via Image+canvas due to browser security restrictions. */
+async function svgToPng(liveSvg: SVGSVGElement): Promise<string> {
+  // Use the actual on-screen rendered size so the PNG matches the panel
+  const rect = liveSvg.getBoundingClientRect();
+  const renderW = Math.round(rect.width);
+  const renderH = Math.round(rect.height);
+
+  const svgStr = new XMLSerializer().serializeToString(liveSvg);
+  const doc = new DOMParser().parseFromString(svgStr, 'image/svg+xml');
+  const svg = doc.querySelector('svg')!;
+
+  // Force the SVG to render at the on-screen size (overrides viewBox-only sizing)
+  svg.setAttribute('width', String(renderW));
+  svg.setAttribute('height', String(renderH));
+
+  // Replace foreignObject with SVG <text> using computed styles from the live DOM
+  const liveFOs = liveSvg.querySelectorAll('foreignObject');
+  const cloneFOs = doc.querySelectorAll('foreignObject');
+  for (let i = 0; i < liveFOs.length && i < cloneFOs.length; i++) {
+    const fo = cloneFOs[i];
+    const liveFO = liveFOs[i];
+    const x = parseFloat(fo.getAttribute('x') || '0');
+    const y = parseFloat(fo.getAttribute('y') || '0');
+    const w = parseFloat(fo.getAttribute('width') || '100');
+    const h = parseFloat(fo.getAttribute('height') || '30');
+
+    // Read text content and style from the live DOM element
+    const liveEl = liveFO.querySelector('div, span, p') || liveFO;
+    const rawText = (liveEl.textContent || '').trim();
+    const cs = getComputedStyle(liveEl);
+    const fill = cs.color || '#000';
+    const fSize = parseFloat(cs.fontSize) || 14;
+
+    const textEl = doc.createElementNS('http://www.w3.org/2000/svg', 'text');
+    textEl.setAttribute('x', String(x + w / 2));
+    textEl.setAttribute('text-anchor', 'middle');
+    textEl.setAttribute('fill', fill);
+    textEl.setAttribute('font-size', String(fSize));
+    textEl.setAttribute('font-family', cs.fontFamily || 'sans-serif');
+
+    const lines = rawText.split('\n').filter(l => l.trim());
+    const lh = fSize * 1.3;
+    const startY = y + h / 2 - ((lines.length - 1) * lh) / 2;
+    for (let j = 0; j < lines.length; j++) {
+      const tspan = doc.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+      tspan.setAttribute('x', String(x + w / 2));
+      tspan.setAttribute('y', String(startY + j * lh));
+      tspan.textContent = lines[j].trim();
+      textEl.appendChild(tspan);
+    }
+    fo.replaceWith(textEl);
+  }
+
+  const finalSvg = new XMLSerializer().serializeToString(doc);
+  const blob = new Blob([finalSvg], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = reject;
+      img.src = url;
+    });
+    const scale = 2; // 2x for retina sharpness
+    const canvas = document.createElement('canvas');
+    canvas.width = renderW * scale;
+    canvas.height = renderH * scale;
+    const ctx = canvas.getContext('2d')!;
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0, renderW, renderH);
+    return canvas.toDataURL('image/png');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+const STORE_URL = 'https://chromewebstore.google.com/detail/pikdhogjjbaakcpedmahckhmajdgdeon';
+
 async function copyToClipboard(summary: SummaryDocument, content: ExtractedContent | null, containerEl: HTMLElement | null) {
   const md = summaryToMarkdown(summary, content);
 
-  // Clone rendered DOM to preserve mermaid SVGs, then clean up UI chrome
+  // Clone rendered DOM to preserve mermaid diagrams, then clean up UI chrome
   let html = md; // fallback
   if (containerEl) {
     const clone = containerEl.cloneNode(true) as HTMLElement;
@@ -610,12 +700,96 @@ async function copyToClipboard(summary: SummaryDocument, content: ExtractedConte
     // Convert section toggle buttons to headings
     clone.querySelectorAll('.section-toggle').forEach(btn => {
       const h3 = document.createElement('h3');
-      // Remove the arrow span, keep only the title text
       btn.querySelector('span')?.remove();
       h3.textContent = btn.textContent?.trim() || '';
       btn.replaceWith(h3);
     });
-    html = clone.innerHTML;
+    // Temporarily expand collapsed sections in the live DOM so SVGs are measurable
+    const liveSections = containerEl.querySelectorAll<HTMLElement>('.section-content');
+    const savedDisplay = Array.from(liveSections, el => el.style.display);
+    liveSections.forEach(el => { el.style.display = 'block'; });
+
+    // Convert mermaid SVGs to PNG (foreignObject → SVG <text>, then canvas)
+    const livePres = containerEl.querySelectorAll('pre.mermaid');
+    const clonePres = clone.querySelectorAll('pre.mermaid');
+    for (let i = 0; i < livePres.length && i < clonePres.length; i++) {
+      const liveSvg = livePres[i].querySelector('svg');
+      if (!liveSvg || !clonePres[i]) continue;
+      try {
+        const pngUrl = await svgToPng(liveSvg as SVGSVGElement);
+        const img = document.createElement('img');
+        img.src = pngUrl;
+        img.alt = 'Diagram';
+        img.style.maxWidth = '100%';
+        clonePres[i].replaceWith(img);
+      } catch {
+        clonePres[i].remove();
+      }
+    }
+
+    // Restore collapsed sections
+    liveSections.forEach((el, i) => { el.style.display = savedDisplay[i]; });
+
+    // Replace Related Topics with a simple comma-separated link list (Google Docs strips inline-block/margin)
+    if (summary.relatedTopics.length > 0) {
+      const topicSections = clone.querySelectorAll('.section-content');
+      // The Related Topics section-content is the last or second-to-last — find it by link pattern
+      for (const sc of topicSections) {
+        const links = sc.querySelectorAll('a[href*="google.com/search"]');
+        if (links.length === 0) continue;
+        const p = document.createElement('p');
+        links.forEach((a, idx) => {
+          if (idx > 0) p.appendChild(document.createTextNode(' \u00b7 '));
+          const link = document.createElement('a');
+          link.href = (a as HTMLAnchorElement).href;
+          link.textContent = a.textContent || '';
+          p.appendChild(link);
+        });
+        sc.innerHTML = '';
+        sc.appendChild(p);
+      }
+    }
+
+    // Replace Tags with a plain-text paragraph
+    if (summary.tags.length > 0) {
+      // Tags container is the last div with inline-block spans
+      const allDivs = clone.querySelectorAll(':scope > div');
+      for (const div of allDivs) {
+        const spans = div.querySelectorAll('span');
+        if (spans.length > 0 && spans[0].textContent?.startsWith('#')) {
+          const p = document.createElement('p');
+          p.style.color = '#666';
+          p.style.fontSize = '13px';
+          p.textContent = Array.from(spans, s => s.textContent?.trim()).join('  ');
+          div.replaceWith(p);
+          break;
+        }
+      }
+    }
+
+    // --- Build header with thumbnail + metadata ---
+    const title = summary.translatedTitle || content?.title || summary.inferredTitle || '';
+    const author = content?.author || summary.inferredAuthor;
+    const date = content?.publishDate || summary.inferredPublishDate;
+    let header = '';
+    if (content?.thumbnailUrl) {
+      header += `<img src="${content.thumbnailUrl}" alt="${title}" style="max-width:100%;border-radius:8px;margin-bottom:8px;" />\n`;
+    }
+    if (title) header += `<h1>${title}</h1>\n`;
+    const metaParts: string[] = [];
+    if (author) metaParts.push(`By ${author}`);
+    if (date) metaParts.push(formatDate(date));
+    if (content?.estimatedReadingTime) metaParts.push(`${content.estimatedReadingTime} min read`);
+    if (metaParts.length) header += `<p style="color:#666;font-size:14px;">${metaParts.join(' &middot; ')}</p>\n<hr />\n`;
+
+    // --- Build footer with source link + attribution ---
+    let footer = '<hr />\n';
+    if (content?.url) {
+      footer += `<p><a href="${content.url}">Original source</a></p>\n`;
+    }
+    footer += `<p style="color:#999;font-size:12px;"><em>Generated with <a href="${STORE_URL}">TL;DR</a></em></p>`;
+
+    html = header + clone.innerHTML + footer;
   }
 
   const item = new ClipboardItem({
