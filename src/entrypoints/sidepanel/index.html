@@ -228,6 +228,21 @@
         cursor: text;
       }
 
+      .markdown-content pre.mermaid .mermaid-retry-btn {
+        display: inline-block;
+        margin-top: 6px;
+        padding: 3px 10px;
+        border: 1px solid var(--md-sys-color-outline-variant);
+        border-radius: var(--md-sys-shape-corner-small);
+        background: var(--md-sys-color-surface-container);
+        color: var(--md-sys-color-primary);
+        font: var(--md-sys-typescale-label-small);
+        cursor: pointer;
+        opacity: 0.9;
+      }
+      .markdown-content pre.mermaid .mermaid-retry-btn:hover { background: var(--md-sys-color-surface-container-high); }
+      .markdown-content pre.mermaid .mermaid-retry-btn:disabled { opacity: 0.4; cursor: default; }
+
       /* Summary callout cards */
       .summary-callout {
         background: var(--md-sys-color-info-container);
@@ -269,6 +284,22 @@
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: var(--md-sys-color-outline-variant); border-radius: 3px; }
       ::-webkit-scrollbar-thumb:hover { background: var(--md-sys-color-outline); }
+
+      /* Header toolbar — responsive squeezing (icons stay 20px, only gaps/padding shrink) */
+      .header-bar { container-type: inline-size; }
+      .header-actions { display: flex; gap: 4px; }
+      .header-actions button { padding: 6px; }
+      @container (max-width: 365px) {
+        .header-actions { gap: 2px; }
+        .header-actions button { padding: 4px; }
+      }
+      @container (max-width: 325px) {
+        .header-actions { gap: 0; }
+        .header-actions button { padding: 2px; }
+      }
+      @container (max-width: 295px) {
+        .header-actions button { padding: 0; }
+      }
 
       /* Animations */
       @keyframes spin { to { transform: rotate(360deg); } }

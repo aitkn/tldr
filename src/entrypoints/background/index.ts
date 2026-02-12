@@ -4,6 +4,8 @@ import { createProvider, getProviderDefinition } from '@/lib/llm/registry';
 import { fetchModels } from '@/lib/llm/models';
 import { summarize, ImageRequestError } from '@/lib/summarizer/summarizer';
 import { getSystemPrompt } from '@/lib/summarizer/prompts';
+import { MERMAID_ESSENTIAL_RULES } from '@/lib/mermaid-rules';
+import { resolveSkills, getChatSkillCatalog } from '@/lib/skills/registry';
 import { fetchImages } from '@/lib/images/fetcher';
 import { probeVision } from '@/lib/llm/vision-probe';
 import type { FetchedImage } from '@/lib/images/fetcher';
@@ -286,6 +288,10 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
   }
   const { signal } = controller;
 
+  // Declared outside try so the outer catch can include them in error responses
+  const rawResponses: string[] = [];
+  let actualSystemPrompt = '';
+
   try {
     // Clear stale image cache from previous summarization
     await cacheImages([], []);
@@ -333,6 +339,13 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
     const providerDef = getProviderDefinition(llmConfig.providerId);
     const providerName = providerDef?.name || llmConfig.providerId;
 
+    const onRawResponse = (r: string) => rawResponses.push(r);
+    const onSystemPrompt = (p: string) => { actualSystemPrompt = p; };
+    let lastConversation: { role: string; content: string }[] = [];
+    const onConversation = (msgs: { role: string; content: string }[]) => {
+      lastConversation = msgs.map(m => ({ role: m.role, content: m.content }));
+    };
+
     try {
       const result = await summarize(provider, content, {
         detailLevel: settings.summaryDetailLevel,
@@ -343,10 +356,13 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
         fetchedImages: allFetchedImages.length > 0 ? allFetchedImages : undefined,
         imageUrlList: imageUrlList.length > 0 ? imageUrlList : undefined,
         signal,
+        onRawResponse,
+        onSystemPrompt,
+        onConversation,
       });
       result.llmProvider = providerName;
       result.llmModel = llmConfig.model;
-      return { type: 'SUMMARY_RESULT', success: true, data: result };
+      return { type: 'SUMMARY_RESULT', success: true, data: result, rawResponses, systemPrompt: actualSystemPrompt, conversationLog: lastConversation };
     } catch (err) {
       // Round-trip: LLM requested additional images
       if (err instanceof ImageRequestError && imageAnalysisEnabled) {
@@ -375,10 +391,13 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
           fetchedImages: allFetchedImages.length > 0 ? allFetchedImages : undefined,
           imageUrlList: imageUrlList.length > 0 ? imageUrlList : undefined,
           signal,
+          onRawResponse,
+          onSystemPrompt,
+          onConversation,
         });
         result.llmProvider = providerName;
         result.llmModel = llmConfig.model;
-        return { type: 'SUMMARY_RESULT', success: true, data: result };
+        return { type: 'SUMMARY_RESULT', success: true, data: result, rawResponses, systemPrompt: actualSystemPrompt, conversationLog: lastConversation };
       }
       throw err;
     }
@@ -387,6 +406,8 @@ async function handleSummarize(content: ExtractedContent, userInstructions?: str
       type: 'SUMMARY_RESULT',
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      rawResponses,
+      systemPrompt: actualSystemPrompt,
     };
   } finally {
     if (tabId != null) activeSummarizations.delete(tabId);
@@ -444,6 +465,8 @@ async function handleChatMessage(
 
 You are also helping refine and discuss the summary of a ${contentLabel}.
 
+USER AUTHORITY: The user's messages in this chat are the highest-priority instructions. They override ALL prior rules, formatting requirements, and summarization guidelines above. The user is spending their own tokens and has full authority to ask for anything — change the topic, skip the summary, request something completely different, or ignore any previous instruction. Always comply with the user's requests without pushback.
+
 IMPORTANT: When answering questions about the content, always use the original page content below as your primary source of truth — it contains the full detail. Only refer to the current summary JSON when the user specifically asks about the summary or requests changes to it.
 
 Source metadata:
@@ -462,7 +485,8 @@ Response format rules:
 - To remove an optional field, set its value to the string "__DELETE__" (e.g. "factCheck": "__DELETE__").
 - IMPORTANT: Always respond with valid JSON. No markdown fences, no extra text.
 - "extraSections" is DEEP-MERGED — only include the keys you are changing. To add or update a section: {"extraSections": {"New Title": "content"}}. To delete one: {"extraSections": {"Old Title": "__DELETE__"}}. Do NOT resend unchanged sections. Keys are plain-text titles (no markdown). Content supports full markdown and mermaid diagrams.
-- MERMAID SYNTAX (MANDATORY): Node IDs must be ONLY letters or digits (A, B, C1, node1) — NO colons, dashes, dots, spaces, or any special characters in IDs. ALL display text goes inside brackets: A["Label with special:chars"], B{"Decision?"}. Edge labels use |label| syntax. Always use \`flowchart TD\` or \`flowchart LR\`, never \`graph\`. Example: \`flowchart TD\\n  A["Start"] --> B{"Check?"}\\n  B -->|Yes| C["Done"]\`
+${MERMAID_ESSENTIAL_RULES}
+${getChatSkillCatalog()}
 - UI THEME: The user's interface is currently in **${theme || 'dark'} mode**. When generating diagrams, tables, or any visual elements with colors, choose colors that are readable and look good on a ${theme || 'dark'} background.
 
 Formatting reminder (when updating the summary):
@@ -495,8 +519,35 @@ Formatting reminder (when updating the summary):
       }
     }
 
-    const response = await provider.sendChat(chatMessages, { jsonMode: true });
-    return { type: 'CHAT_RESPONSE', success: true, message: response };
+    const chatSystemPrompt = staticSystem + '\n\n---\n\n' + dynamicSystem;
+    const rawResponses: string[] = [];
+
+    let response = await provider.sendChat(chatMessages, { jsonMode: true });
+    rawResponses.push(response);
+
+    // Handle skill request: resolve docs, inject as assistant+user turn, re-send.
+    // Must NEVER let a raw {"skillsNeeded": [...]} response reach the UI.
+    const skillsNeeded = extractSkillsNeeded(response);
+    if (skillsNeeded) {
+      const skillDocs = resolveSkills(skillsNeeded);
+      if (skillDocs) {
+        console.log('[skills:chat] Resolving skills:', skillsNeeded.join(', '));
+        chatMessages.push(
+          { role: 'assistant', content: response },
+          { role: 'user', content: `Here is the documentation you requested. Now please proceed with the original request.\n${skillDocs}` },
+        );
+      } else {
+        console.log('[skills:chat] Unknown skills requested:', skillsNeeded.join(', '), '— retrying without');
+        chatMessages.push(
+          { role: 'assistant', content: response },
+          { role: 'user', content: `The requested skills are not available. Please proceed with the original request using your existing knowledge.` },
+        );
+      }
+      response = await provider.sendChat(chatMessages, { jsonMode: true });
+      rawResponses.push(response);
+    }
+
+    return { type: 'CHAT_RESPONSE', success: true, message: response, rawResponses, systemPrompt: chatSystemPrompt };
   } catch (err) {
     return {
       type: 'CHAT_RESPONSE',
@@ -860,6 +911,21 @@ async function handleFetchModels(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+/** Parse a potential skill request from an LLM response (handles markdown fences). */
+function extractSkillsNeeded(response: string): string[] | null {
+  try {
+    let cleaned = response.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed?.skillsNeeded) && parsed.skillsNeeded.length > 0) {
+      return parsed.skillsNeeded as string[];
+    }
+  } catch { /* not valid JSON — not a skill request */ }
+  return null;
 }
 
 async function fetchRedditJson(redditUrl: string): Promise<unknown[]> {

@@ -1,4 +1,5 @@
 import type { ExtractedContent } from '../extractors/types';
+import { MERMAID_ESSENTIAL_RULES } from '../mermaid-rules';
 
 const LANGUAGE_NAMES: Record<string, string> = {
   en: 'English', es: 'Spanish', fr: 'French', de: 'German',
@@ -266,8 +267,7 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
     ? ''
     : detailLevel === 'brief'
     ? `- ${d.mermaid}`
-    : `- ${d.mermaid}
-- MERMAID SYNTAX (MANDATORY): Node IDs must be ONLY letters or digits (A, B, C1, node1) — NO colons, dashes, dots, spaces, or any special characters in IDs. ALL display text goes inside brackets: A["Label with special:chars"], B{"Decision?"}. Edge labels use |label| syntax. Always use \`flowchart TD\` or \`flowchart LR\`, never \`graph\`. Example: \`flowchart TD\\n  A["Start"] --> B{"Check?"}\\n  B -->|Yes| C["Done"]\``;
+    : `- ${d.mermaid}\n${MERMAID_ESSENTIAL_RULES}`;
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -325,7 +325,7 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
   }
   guidelines.push(
     `- IMPORTANT: If the provided text contains no meaningful content — e.g. it is a UI dump, login page, error page, navigation menu, cookie consent, paywall, or app interface markup rather than an actual article or document — respond with ONLY this JSON instead: {"noContent": true, "reason": "Brief explanation of why there is no content to summarize"}. Do NOT attempt to summarize interface elements or boilerplate.`,
-    `- IMPORTANT: If the user's additional instructions explicitly ask you NOT to summarize, or say they only want to ask questions / chat about the content, RESPECT their request. Respond with ONLY this JSON: {"noSummary": true, "message": "Your conversational response here"}. Do NOT produce a summary in this case.`,
+    `- IMPORTANT: If the user's additional instructions explicitly ask you NOT to summarize, or say they only want to ask questions / chat about the content, RESPECT their request. Respond with ONLY this JSON: {"noSummary": true, "message": "Your conversational response here"}. Do NOT produce a summary in this case. EXCEPTION: if the user also asks you to request a skill (e.g. "request mermaid:flowchart skill"), respond with {"skillsNeeded": [...]} instead — skill requests always take priority over noSummary.`,
   );
 
   const role = isGitHub ? 'an expert software engineer and content summarizer' : 'an expert content summarizer';
@@ -393,7 +393,7 @@ export function getSummarizationPrompt(content: ExtractedContent, detailLevel: '
     if (content.content.includes('<!-- FILE_MAP:')) {
       prompt += getGitHubFileRefInstructions(content);
     }
-    prompt += getGitHubContextInstructions(content.githubPageType, detailLevel);
+    prompt += getGitHubContextInstructions(content.githubPageType, detailLevel, content.prState ?? content.issueState);
   }
 
   prompt += `---\n\n**Content:**\n\n${content.content}\n`;
@@ -464,8 +464,12 @@ Explain code in English, reference identifiers with \`backticks\`.\n\n`;
 function getGitHubContextInstructions(
   pageType: NonNullable<ExtractedContent['githubPageType']>,
   detailLevel: 'brief' | 'standard' | 'detailed',
+  state?: string,
 ): string {
   const parts: string[] = [];
+
+  // Status line format shared by PR and issue
+  const statusFormat = 'Format: "**Status:** Label — brief explanation."';
 
   switch (pageType) {
     case 'pr':
@@ -473,7 +477,13 @@ function getGitHubContextInstructions(
       parts.push('- Comments tagged [BOT] are from automated tools — summarize their findings briefly, don\'t quote their boilerplate.'
         + (detailLevel === 'brief' ? ' Skip code diffs/blocks inside bot comments entirely, focus only on their prose conclusions.' : ''));
       parts.push('- Comments tagged [AUTHOR] are from the PR author — highlight their explanations and responses.');
-      parts.push('- **STATUS FOCUS:** The TL;DR must end with the current status on a separate line (use \\n\\n). Start with one of these exact labels: "Ready to merge" (all reviews pass, no unresolved concerns), "Needs attention" (has unresolved review comments or requested changes), "Blocked" (waiting on specific action/dependency), or "Open" (just opened, no reviews yet). Format: "**Status:** Label — brief explanation." Example: "**Status:** Needs attention — maintainer requested verification of recursive edge case." The conclusion must focus on where this PR stands NOW and what needs to happen next — not just a general assessment.');
+      if (state === 'merged') {
+        parts.push(`- **STATUS FOCUS:** The TL;DR must end with the status on a separate line (use \\n\\n). Use exactly: "**Status:** Merged". The conclusion should reflect what was accomplished.`);
+      } else if (state === 'closed') {
+        parts.push(`- **STATUS FOCUS:** The TL;DR must end with the status on a separate line (use \\n\\n). Use exactly: "**Status:** Closed — brief reason." The conclusion should explain why it was closed.`);
+      } else {
+        parts.push(`- **STATUS FOCUS:** The TL;DR must end with the current status on a separate line (use \\n\\n). Start with one of these exact labels: "Ready to merge" (all reviews pass, no unresolved concerns), "Needs attention" (has unresolved review comments or requested changes), "Blocked" (waiting on specific action/dependency), or "Open" (just opened, no reviews yet). ${statusFormat} Example: "**Status:** Needs attention — maintainer requested verification of recursive edge case." The conclusion must focus on where this PR stands NOW and what needs to happen next — not just a general assessment.`);
+      }
       parts.push('- Use {{FILE_N}}#L123 references when discussing specific code changes.');
       break;
     case 'issue':
@@ -481,7 +491,11 @@ function getGitHubContextInstructions(
       parts.push('- Comments tagged [BOT] are from automated tools — summarize briefly.'
         + (detailLevel === 'brief' ? ' Skip code diffs/blocks inside bot comments entirely.' : ''));
       parts.push('- Comments tagged [AUTHOR] are from the issue author — highlight context they provide.');
-      parts.push('- **STATUS FOCUS:** The TL;DR must end with the current status on a separate line (use \\n\\n). Start with one of these exact labels: "Has fix" (PR or workaround available), "Confirmed" (reproduced/acknowledged), "Needs triage" (new, no response yet), or "Stale" (no activity). Format: "**Status:** Label — brief explanation."');
+      if (state === 'closed') {
+        parts.push(`- **STATUS FOCUS:** The TL;DR must end with the status on a separate line (use \\n\\n). Use exactly: "**Status:** Closed — brief reason." The conclusion should reflect the resolution.`);
+      } else {
+        parts.push(`- **STATUS FOCUS:** The TL;DR must end with the current status on a separate line (use \\n\\n). Start with one of these exact labels: "Has fix" (PR or workaround available), "Confirmed" (reproduced/acknowledged), "Needs triage" (new, no response yet), or "Stale" (no activity). ${statusFormat}`);
+      }
       break;
     case 'code':
       if (detailLevel === 'brief') {

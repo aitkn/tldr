@@ -67,6 +67,10 @@ export interface SummaryResultMessage {
   success: boolean;
   data?: SummaryDocument;
   error?: string;
+  rawResponses?: string[];
+  systemPrompt?: string;
+  /** Full conversation messages sent to the LLM (for debug panel). */
+  conversationLog?: { role: string; content: string }[];
 }
 
 export interface ChatMessageRequest {
@@ -82,6 +86,8 @@ export interface ChatResponseMessage {
   success: boolean;
   message?: string;
   error?: string;
+  rawResponses?: string[];
+  systemPrompt?: string;
 }
 
 export interface ChatChunkMessage {

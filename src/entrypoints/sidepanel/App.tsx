@@ -28,13 +28,15 @@ import { getProviderDefinition } from '@/lib/llm/registry';
 import { Toast } from '@/components/Toast';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Spinner } from '@/components/Spinner';
-import { MarkdownRenderer, extractMermaidSources } from '@/components/MarkdownRenderer';
+import { MarkdownRenderer, extractMermaidSources, fixMermaidBlocks } from '@/components/MarkdownRenderer';
+import { MERMAID_ESSENTIAL_RULES, getRelevantCheatsheet } from '@/lib/mermaid-rules';
 import mermaid from 'mermaid';
 import { SettingsDrawer } from '@/components/SettingsDrawer';
 import { ChatInputBar } from '@/components/ChatInputBar';
 import type { SummarizeVariant } from '@/components/ChatInputBar';
 import { useTheme } from '@/hooks/useTheme';
-import { getSystemPrompt, getSummarizationPrompt } from '@/lib/summarizer/prompts';
+import { getSummarizationPrompt } from '@/lib/summarizer/prompts';
+import { buildSummarizationSystemPrompt } from '@/lib/summarizer/summarizer';
 
 interface DisplayMessage {
   role: 'user' | 'assistant';
@@ -47,6 +49,8 @@ interface TabState {
   summary: SummaryDocument | null;
   chatMessages: DisplayMessage[];
   rawResponses: string[];
+  actualSystemPrompt: string;
+  conversationLog: { role: string; content: string }[];
   notionUrl: string | null;
   extractEpoch: number;
   loading: boolean;
@@ -67,7 +71,7 @@ async function findMermaidErrors(
 
   const errors: Array<{ source: string; error: string }> = [];
   for (const field of fields) {
-    for (const source of extractMermaidSources(field)) {
+    for (const source of extractMermaidSources(fixMermaidBlocks(field))) {
       try {
         await mermaid.parse(source);
       } catch (err) {
@@ -98,7 +102,8 @@ async function autoFixMermaid(
       `Error: ${e.error}\n\nBroken diagram:\n\`\`\`mermaid\n${e.source}\n\`\`\``
     ).join('\n\n---\n\n');
 
-    const fixRequest = `The following mermaid diagram(s) in the summary have syntax errors and failed to render:\n\n${errorDescs}\n\nFix the mermaid syntax errors silently. Rules:\n- Return ONLY the corrected fields in "updates". Set "text" to "".\n- Do NOT add any commentary, changelog, or "fixes applied" notes to the content — just fix the syntax.\n- All diagrams MUST use \`\`\`mermaid fenced code blocks (not plain \`\`\`).`;
+    const relevantRef = getRelevantCheatsheet(errors.map(e => e.source));
+    const fixRequest = `The following mermaid diagram(s) in the summary have syntax errors and failed to render:\n\n${errorDescs}\n\nFix the mermaid syntax errors silently. Rules:\n- Return ONLY the corrected fields in "updates". Set "text" to "".\n- Do NOT add any commentary, changelog, or "fixes applied" notes to the content — just fix the syntax.\n- All diagrams MUST use \`\`\`mermaid fenced code blocks (not plain \`\`\`).\n\n${MERMAID_ESSENTIAL_RULES}${relevantRef}`;
     const userMsg: DisplayMessage = { role: 'user', content: fixRequest, internal: true };
     fixMessages.push(userMsg);
     setChatMessages(prev => [...prev, userMsg]);
@@ -117,7 +122,8 @@ async function autoFixMermaid(
     }) as ChatResponseMessage;
 
     if (fixResponse.success && fixResponse.message) {
-      setRawResponses(prev => [...prev, fixResponse.message!]);
+      const fixRaw = fixResponse.rawResponses?.length ? fixResponse.rawResponses : [fixResponse.message!];
+      setRawResponses(prev => [...prev, ...fixRaw]);
       const { updates: fixUpdates, text: chatText } = extractJsonAndText(fixResponse.message);
       const displayText = chatText || (fixUpdates ? 'Summary corrected.' : 'Failed to fix mermaid diagrams.');
       const assistantMsg: DisplayMessage = { role: 'assistant', content: displayText, internal: true };
@@ -265,6 +271,8 @@ export function App() {
   // Chat state
   const [chatMessages, setChatMessages] = useState<DisplayMessage[]>([]);
   const [rawResponses, setRawResponses] = useState<string[]>([]);
+  const [actualSystemPrompt, setActualSystemPrompt] = useState('');
+  const [conversationLog, setConversationLog] = useState<{ role: string; content: string }[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
 
@@ -284,12 +292,19 @@ export function App() {
   // Window ID — set once on mount to filter cross-window events
   const windowIdRef = useRef<number | null>(null);
 
+  // Debug-tab mode: when the sidepanel is opened as a regular tab (e.g. via MCP
+  // chrome-devtools), we store our own tab ID so we can ignore it in tab events
+  // and link to the most recent real page tab instead.
+  const debugTabIdRef = useRef<number | null>(null);
+
   // Ref-mirrors: reflect latest state so event handlers never read stale closures.
   // Synced directly in the component body (not via effects) for immediate consistency.
   const contentRef = useRef<ExtractedContent | null>(null);
   const summaryRef = useRef<SummaryDocument | null>(null);
   const chatMessagesRef = useRef<DisplayMessage[]>([]);
   const rawResponsesRef = useRef<string[]>([]);
+  const actualSystemPromptRef = useRef('');
+  const conversationLogRef = useRef<{ role: string; content: string }[]>([]);
   const notionUrlRef = useRef<string | null>(null);
   const extractEpochRef = useRef<number>(0);
   const activeTabIdRef = useRef<number | null>(null);
@@ -302,6 +317,8 @@ export function App() {
   summaryRef.current = summary;
   chatMessagesRef.current = chatMessages;
   rawResponsesRef.current = rawResponses;
+  actualSystemPromptRef.current = actualSystemPrompt;
+  conversationLogRef.current = conversationLog;
   notionUrlRef.current = notionUrl;
   extractEpochRef.current = extractEpoch;
   activeTabIdRef.current = activeTabId;
@@ -316,6 +333,8 @@ export function App() {
       summary: summaryRef.current,
       chatMessages: chatMessagesRef.current,
       rawResponses: rawResponsesRef.current,
+      actualSystemPrompt: actualSystemPromptRef.current,
+      conversationLog: conversationLogRef.current,
       notionUrl: notionUrlRef.current,
       extractEpoch: extractEpochRef.current,
       loading: loadingRef.current,
@@ -333,6 +352,8 @@ export function App() {
       setSummary(saved.summary);
       setChatMessages(saved.chatMessages);
       setRawResponses(saved.rawResponses);
+      setActualSystemPrompt(saved.actualSystemPrompt);
+      setConversationLog(saved.conversationLog);
       setNotionUrl(saved.notionUrl);
       setExtractEpoch(saved.extractEpoch);
       setLoading(saved.loading);
@@ -347,6 +368,7 @@ export function App() {
       setSummary(null);
       setChatMessages([]);
       setRawResponses([]);
+      setActualSystemPrompt('');
       setNotionUrl(null);
       setLoading(false);
       setChatLoading(false);
@@ -390,6 +412,8 @@ export function App() {
     }
     setSummary(null);
     setChatMessages([]);
+    setRawResponses([]);
+    setActualSystemPrompt('');
     setNotionUrl(null);
     setPendingResummarize(false);
     extractContent();
@@ -419,8 +443,32 @@ export function App() {
     chromeObj.windows.getCurrent((win) => {
       windowIdRef.current = win.id ?? null;
     });
-    chromeObj.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]?.id != null) setActiveTabId(tabs[0].id);
+
+    // Detect if we're running as a tab (debug mode) vs. side panel.
+    // chrome.tabs.getCurrent() returns the tab when called from a tab context,
+    // but returns undefined when called from a side panel.
+    chromeObj.tabs.getCurrent((self) => {
+      if (self?.id != null) {
+        // We ARE a tab — link to the most recent real (non-extension) tab
+        debugTabIdRef.current = self.id;
+        chromeObj.tabs.query({ currentWindow: true }, (tabs) => {
+          const target = tabs
+            .filter(t => t.id !== self.id
+              && !t.url?.startsWith('chrome-extension://')
+              && !t.url?.startsWith('chrome://')
+              && !t.url?.startsWith('about:'))
+            .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
+          if (target?.id != null) {
+            setActiveTabId(target.id);
+            console.log('[debug-tab] Linked to tab %d (%s)', target.id, target.url);
+          }
+        });
+      } else {
+        // Normal side panel — use the active tab
+        chromeObj.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs[0]?.id != null) setActiveTabId(tabs[0].id);
+        });
+      }
     });
   }, []);
 
@@ -429,16 +477,17 @@ export function App() {
     const chromeObj = (globalThis as unknown as { chrome: typeof chrome }).chrome;
     let spaTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const onActivated = (info: chrome.tabs.TabActiveInfo) => {
-      if (windowIdRef.current != null && info.windowId !== windowIdRef.current) return;
+    const isUnreachable = (url?: string) =>
+      !url || url.startsWith('chrome://') || url.startsWith('about:') || url.startsWith('chrome-extension://');
+
+    const switchToTab = (tabId: number) => {
       const prevTabId = activeTabIdRef.current;
       saveTabState(prevTabId);
-      setActiveTabId(info.tabId);
-      const cached = tabStatesRef.current.get(info.tabId);
+      setActiveTabId(tabId);
+      const cached = tabStatesRef.current.get(tabId);
       if (cached?.content) {
-        restoreTabState(info.tabId);
+        restoreTabState(tabId);
       } else {
-        // Clear stale UI before attempting extraction on the new tab
         setContent(null);
         setSummary(null);
         setChatMessages([]);
@@ -450,8 +499,20 @@ export function App() {
       }
     };
 
-    const isUnreachable = (url?: string) =>
-      !url || url.startsWith('chrome://') || url.startsWith('about:') || url.startsWith('chrome-extension://');
+    const onActivated = (info: chrome.tabs.TabActiveInfo) => {
+      if (windowIdRef.current != null && info.windowId !== windowIdRef.current) return;
+      // In debug-tab mode, ignore our own tab and other non-page tabs
+      if (info.tabId === debugTabIdRef.current) return;
+      if (debugTabIdRef.current != null) {
+        chromeObj.tabs.get(info.tabId, (tab) => {
+          if (chromeObj.runtime.lastError) return;
+          if (isUnreachable(tab?.url)) return;
+          switchToTab(info.tabId);
+        });
+        return;
+      }
+      switchToTab(info.tabId);
+    };
 
     const onUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
       if (tabId === activeTabIdRef.current) {
@@ -555,6 +616,66 @@ export function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, chatLoading]);
 
+  // Manual mermaid retry — user clicks "Retry fix" on a broken diagram
+  useEffect(() => {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const handler = (e: Event) => {
+      const { source, error } = (e as CustomEvent<{ source: string; error: string }>).detail;
+      if (!summaryRef.current || !contentRef.current) return;
+
+      setChatLoading(true);
+
+      (async () => {
+        try {
+          const relevantRef = getRelevantCheatsheet([source]);
+          const fixRequest = `The following mermaid diagram in the summary has a syntax error and failed to render:\n\nError: ${error}\n\nBroken diagram:\n\`\`\`mermaid\n${source}\n\`\`\`\n\nFix the mermaid syntax error silently. Rules:\n- Return ONLY the corrected fields in "updates". Set "text" to "".\n- Do NOT add any commentary, changelog, or "fixes applied" notes to the content — just fix the syntax.\n- All diagrams MUST use \`\`\`mermaid fenced code blocks (not plain \`\`\`).\n\n${MERMAID_ESSENTIAL_RULES}${relevantRef}`;
+          const userMsg: DisplayMessage = { role: 'user', content: fixRequest, internal: true };
+          setChatMessages(prev => [...prev, userMsg]);
+
+          const allMessages: ChatMessage[] = [
+            ...chatMessagesRef.current.map(m => ({ role: m.role, content: m.content })),
+          ];
+
+          const fixResponse = await sendMessage({
+            type: 'CHAT_MESSAGE',
+            messages: allMessages,
+            summary: summaryRef.current!,
+            content: contentRef.current!,
+            theme: resolvedTheme,
+          }) as ChatResponseMessage;
+
+          if (fixResponse.success && fixResponse.message) {
+            if (fixResponse.rawResponses?.length) {
+              setRawResponses(prev => [...prev, ...fixResponse.rawResponses!]);
+            }
+            const { updates, text: chatText } = extractJsonAndText(fixResponse.message);
+            const displayText = chatText || (updates ? 'Diagram fixed.' : 'Failed to fix diagram.');
+            const assistantMsg: DisplayMessage = { role: 'assistant', content: displayText, internal: true };
+            setChatMessages(prev => [...prev, assistantMsg]);
+
+            if (updates && summaryRef.current) {
+              const updated = mergeSummaryUpdates(summaryRef.current, updates);
+              if (summaryRef.current.llmProvider) updated.llmProvider = summaryRef.current.llmProvider;
+              if (summaryRef.current.llmModel) updated.llmModel = summaryRef.current.llmModel;
+              setSummary(updated);
+              setNotionUrl(null);
+            }
+          } else {
+            setChatMessages(prev => [...prev, { role: 'assistant', content: 'Failed to fix diagram.', internal: true }]);
+          }
+        } catch {
+          setChatMessages(prev => [...prev, { role: 'assistant', content: 'Failed to fix diagram.', internal: true }]);
+        } finally {
+          setChatLoading(false);
+        }
+      })();
+    };
+
+    el.addEventListener('mermaid-retry', handler);
+    return () => el.removeEventListener('mermaid-retry', handler);
+  }, [resolvedTheme]);
+
   // Track the detail level that produced the current summary, so cycling back clears the re-summarize state
   const [pendingResummarize, setPendingResummarize] = useState(false);
   const summaryDetailLevelRef = useRef<Settings['summaryDetailLevel'] | null>(null);
@@ -586,6 +707,8 @@ export function App() {
     const originTabId = activeTabIdRef.current;
     setLoading(true);
     setNotionUrl(null);
+    setRawResponses([]);
+    setActualSystemPrompt('');
 
     // Show user instructions in chat if provided
     if (userInstructions) {
@@ -613,6 +736,19 @@ export function App() {
         tabId: originTabId ?? undefined,
       }) as SummaryResultMessage;
 
+      // Store raw LLM responses and system prompt for debug panel BEFORE
+      // checking success — they're available even when summarization fails
+      // (e.g. LLM text response, noSummary refusal, noContent detection).
+      if (summaryResponse.rawResponses?.length) {
+        setRawResponses(prev => [...prev, ...summaryResponse.rawResponses!]);
+      }
+      if (summaryResponse.systemPrompt) {
+        setActualSystemPrompt(summaryResponse.systemPrompt);
+      }
+      if (summaryResponse.conversationLog?.length) {
+        setConversationLog(summaryResponse.conversationLog);
+      }
+
       if (!summaryResponse.success || !summaryResponse.data) {
         throw new Error(summaryResponse.error || 'Failed to generate summary');
       }
@@ -631,6 +767,15 @@ export function App() {
         if (saved) {
           saved.summary = finalSummary;
           saved.loading = false;
+          if (summaryResponse.rawResponses?.length) {
+            saved.rawResponses = [...saved.rawResponses, ...summaryResponse.rawResponses];
+          }
+          if (summaryResponse.systemPrompt) {
+            saved.actualSystemPrompt = summaryResponse.systemPrompt;
+          }
+          if (summaryResponse.conversationLog?.length) {
+            saved.conversationLog = summaryResponse.conversationLog;
+          }
         }
       }
     } catch (err) {
@@ -786,8 +931,10 @@ export function App() {
         throw new Error(response.error || 'Chat failed');
       }
 
-      // Store raw LLM response for debug panel
-      setRawResponses(prev => [...prev, response.message!]);
+      // Store raw LLM responses for debug panel (includes skill round-trips)
+      const chatRaw = response.rawResponses?.length ? response.rawResponses : [response.message!];
+      setRawResponses(prev => [...prev, ...chatRaw]);
+      if (response.systemPrompt) setActualSystemPrompt(response.systemPrompt);
 
       // Parse response: extract updates (partial or full) and remaining text (chat)
       const { updates, text: chatText } = extractJsonAndText(response.message!);
@@ -827,7 +974,7 @@ export function App() {
             saved.notionUrl = null;
           }
           saved.chatMessages = [...saved.chatMessages, { role: 'assistant', content: displayText }];
-          saved.rawResponses = [...saved.rawResponses, response.message!];
+          saved.rawResponses = [...saved.rawResponses, ...chatRaw];
           saved.chatLoading = false;
         }
       }
@@ -1033,6 +1180,8 @@ export function App() {
             summary={summary}
             chatMessages={chatMessages}
             rawResponses={rawResponses}
+            actualSystemPrompt={actualSystemPrompt}
+            conversationLog={conversationLog}
           />
         )}
 
@@ -1099,7 +1248,7 @@ export function App() {
 
         {/* Chat section */}
         {chatMessages.some(m => !m.internal) && (
-          <div style={{ padding: '8px 16px 16px' }}>
+          <div class="no-print" style={{ padding: '8px 16px 16px' }}>
             <div style={{
               font: 'var(--md-sys-typescale-label-medium)',
               color: 'var(--md-sys-color-on-surface-variant)',
@@ -1249,10 +1398,12 @@ function mergeSummaryUpdates(existing: SummaryDocument, updates: Partial<Summary
         if (sValue === DELETE_SENTINEL) {
           delete base[sKey];
         } else if (typeof sValue === 'string') {
-          base[sKey] = sValue;
+          base[sKey] = fixMermaidBlocks(sValue);
         }
       }
       merged.extraSections = Object.keys(base).length > 0 ? base : undefined;
+    } else if (typeof value === 'string') {
+      (merged as Record<string, unknown>)[key] = fixMermaidBlocks(value);
     } else {
       (merged as Record<string, unknown>)[key] = value;
     }
@@ -1424,12 +1575,51 @@ function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh, onExport,
   // Reset mdSaved when onSaveMd changes (new summary)
   useEffect(() => setMdSaved(false), [onSaveMd]);
 
+  // Secret debug activation: click title → type "debug" within 10s
+  const [listening, setListening] = useState(false);
+  const bufferRef = useRef('');
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleTitleClick = () => {
+    if (debugOpen) {
+      onToggleDebug();
+      return;
+    }
+    bufferRef.current = '';
+    setListening(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      setListening(false);
+      bufferRef.current = '';
+    }, 10000);
+  };
+
+  useEffect(() => {
+    if (!listening) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key.length === 1) {
+        e.preventDefault();
+        bufferRef.current += e.key.toLowerCase();
+        if (bufferRef.current.includes('debug')) {
+          onToggleDebug();
+          setListening(false);
+          bufferRef.current = '';
+          if (timerRef.current) clearTimeout(timerRef.current);
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [listening, onToggleDebug]);
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
   return (
-    <div class="no-print" style={{
+    <div class="no-print header-bar" style={{
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: '12px 16px',
+      padding: '10px 12px',
       borderBottom: '1px solid var(--md-sys-color-outline-variant)',
       flexShrink: 0,
       backgroundColor: 'var(--md-sys-color-surface)',
@@ -1437,15 +1627,19 @@ function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh, onExport,
       position: 'relative',
       boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <span title="Too Long; Didn't Read" style={{ font: 'var(--md-sys-typescale-title-large)', color: 'var(--md-sys-color-on-surface)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+        <span
+          title="Too Long; Didn't Read"
+          onClick={handleTitleClick}
+          style={{ font: 'var(--md-sys-typescale-title-large)', color: 'var(--md-sys-color-on-surface)', cursor: 'pointer', userSelect: 'none' }}
+        >
           TL;DR
         </span>
         <IconButton onClick={() => window.open('https://buymeacoffee.com/aitkn', '_blank', 'noopener,noreferrer')} label="Support">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" /></svg>
         </IconButton>
       </div>
-      <div style={{ display: 'flex', gap: '4px' }}>
+      <div class="header-actions" style={{ alignItems: 'center' }}>
         {notionUrl ? (
           <IconButton onClick={() => window.open(notionUrl, '_blank', 'noopener,noreferrer')} label="Open in Notion">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M5 19h14V5h-7V3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5c-1.1 0-2-.9-2-2v-7h2v7zM10 3v2H6.41l9.83 9.83-1.41 1.41L5 6.41V10H3V3h7z" /></svg>
@@ -1481,9 +1675,6 @@ function Header({ onThemeToggle, themeMode, onOpenSettings, onRefresh, onExport,
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 3H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h6v2H8v2h8v-2h-2v-2h6c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 12H4V5h16v10z" /></svg>
           )}
         </IconButton>
-        <IconButton onClick={onToggleDebug} label="Debug prompts" active={debugOpen}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z" /></svg>
-        </IconButton>
         <IconButton onClick={onOpenSettings} label="Settings">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
@@ -1510,7 +1701,6 @@ function DetailLevelButton({ level, onClick }: { level: 'brief' | 'standard' | '
         background: 'none',
         border: 'none',
         cursor: 'pointer',
-        padding: '8px',
         borderRadius: 'var(--md-sys-shape-corner-small)',
         color: 'var(--md-sys-color-on-surface-variant)',
         display: 'flex',
@@ -1539,7 +1729,6 @@ function IconButton({ onClick, label, children, disabled, active }: { onClick?: 
         background: active ? 'var(--md-sys-color-primary-container)' : 'none',
         border: 'none',
         cursor: disabled ? 'default' : 'pointer',
-        padding: '8px',
         borderRadius: 'var(--md-sys-shape-corner-small)',
         color: active ? 'var(--md-sys-color-on-primary-container)' : 'var(--md-sys-color-on-surface-variant)',
         opacity: disabled ? 0.35 : 1,
@@ -1575,35 +1764,40 @@ function ChatBubble({ role, content: text }: { role: 'user' | 'assistant'; conte
   );
 }
 
-function DebugPanel({ content, settings, summary, chatMessages, rawResponses }: {
+function DebugPanel({ content, settings, summary, chatMessages, rawResponses, actualSystemPrompt, conversationLog }: {
   content: ExtractedContent;
   settings: Settings;
   summary: SummaryDocument | null;
   chatMessages: DisplayMessage[];
   rawResponses: string[];
+  actualSystemPrompt: string;
+  conversationLog: { role: string; content: string }[];
 }) {
-  const imageCount = content.richImages?.length ?? 0;
-  let imageAnalysisEnabled = false;
-  if (imageCount > 0) {
-    const activeConfig = getActiveProviderConfig(settings);
-    const key = `${settings.activeProviderId}:${activeConfig.model}`;
-    const vision = settings.modelCapabilities?.[key]?.vision;
-    imageAnalysisEnabled = !!((settings.enableImageAnalysis ?? true) && (vision === 'base64' || vision === 'url'));
-  }
-
-  const systemPrompt = getSystemPrompt(
-    settings.summaryDetailLevel,
-    settings.summaryLanguage,
-    settings.summaryLanguageExcept,
-    imageAnalysisEnabled,
-    content.wordCount,
-    content.type,
-    content.githubPageType,
-  );
+  // Use the actual system prompt when available (after summarization), otherwise preview
+  // using the same buildSummarizationSystemPrompt() that summarize() uses
+  const systemPrompt = actualSystemPrompt || (() => {
+    const imageCount = content.richImages?.length ?? 0;
+    let imageAnalysisEnabled = false;
+    if (imageCount > 0) {
+      const activeConfig = getActiveProviderConfig(settings);
+      const key = `${settings.activeProviderId}:${activeConfig.model}`;
+      const vision = settings.modelCapabilities?.[key]?.vision;
+      imageAnalysisEnabled = !!((settings.enableImageAnalysis ?? true) && (vision === 'base64' || vision === 'url'));
+    }
+    return buildSummarizationSystemPrompt(
+      settings.summaryDetailLevel,
+      settings.summaryLanguage,
+      settings.summaryLanguageExcept,
+      imageAnalysisEnabled,
+      content.wordCount,
+      content.type,
+      content.githubPageType,
+    );
+  })();
   const userPrompt = getSummarizationPrompt(content, settings.summaryDetailLevel);
 
   return (
-    <div style={{
+    <div class="no-print" style={{
       margin: '0 16px 12px',
       padding: '10px',
       borderRadius: 'var(--md-sys-shape-corner-medium)',
@@ -1627,6 +1821,12 @@ function DebugPanel({ content, settings, summary, chatMessages, rawResponses }: 
         <DebugSection
           title="Chat"
           content={chatMessages.map((m) => `[${m.role}${m.internal ? ' (auto-fix)' : ''}]\n${m.content}`).join('\n\n---\n\n')}
+        />
+      )}
+      {conversationLog.length > 0 && (
+        <DebugSection
+          title={`Conversation (${conversationLog.length} messages)`}
+          content={conversationLog.map((m, i) => `--- [${m.role}] (${m.content.length.toLocaleString()} chars) ---\n${m.content}`).join('\n\n')}
         />
       )}
       {rawResponses.length > 0 && (

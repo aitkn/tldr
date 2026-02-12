@@ -189,11 +189,19 @@ export function extractMermaidSources(md: string): string[] {
   return sources;
 }
 
+// Fix unlabeled mermaid code blocks: ```\nflowchart → ```mermaid\nflowchart
+const MERMAID_KEYWORDS = 'flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|gitgraph|mindmap|timeline|sankey|xychart|block|packet|architecture|kanban';
+const FIX_MERMAID_RE = new RegExp('```\\n((?:' + MERMAID_KEYWORDS + ')\\b)', 'g');
+export function fixMermaidBlocks(md: string): string {
+  return md.replace(FIX_MERMAID_RE, '```mermaid\n$1');
+}
+
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   const ref = useRef<HTMLDivElement>(null);
   const theme = useResolvedTheme();
-  const mermaidSources = extractMermaidSources(content);
-  const html = DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
+  const fixed = fixMermaidBlocks(content);
+  const mermaidSources = extractMermaidSources(fixed);
+  const html = DOMPurify.sanitize(marked.parse(fixed, { async: false }) as string);
 
   // Hide broken images gracefully (URLs may expire, especially social media thumbnails)
   useEffect(() => {
@@ -247,6 +255,21 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           hint.className = 'mermaid-error-hint';
           hint.textContent = msg;
           el.appendChild(hint);
+
+          // Retry button — dispatches a bubbling custom event for App to handle
+          const retryBtn = document.createElement('button');
+          retryBtn.className = 'mermaid-retry-btn';
+          retryBtn.textContent = 'Retry fix';
+          retryBtn.title = 'Send this diagram to LLM for another fix attempt';
+          retryBtn.addEventListener('click', () => {
+            retryBtn.disabled = true;
+            el.dispatchEvent(new CustomEvent('mermaid-retry', {
+              bubbles: true,
+              detail: { source, error: msg },
+            }));
+          });
+          el.appendChild(retryBtn);
+
           // Clean up orphaned mermaid render container
           document.getElementById('d' + renderId)?.remove();
         }
