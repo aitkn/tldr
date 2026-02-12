@@ -1,9 +1,7 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import type { SummaryDocument } from '@/lib/summarizer/types';
 import type { ExtractedContent } from '@/lib/extractors/types';
 import { MarkdownRenderer, InlineMarkdown } from '@/components/MarkdownRenderer';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
 
 const LANG_LABELS: Record<string, string> = {
   en: 'EN', es: 'ES', fr: 'FR', de: 'DE',
@@ -20,6 +18,7 @@ interface SummaryContentProps {
 }
 
 export function SummaryContent({ summary, content, onExport, notionUrl, exporting, onNavigate }: SummaryContentProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const [mdSaved, setMdSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   useEffect(() => { setMdSaved(false); setCopied(false); }, [summary]);
@@ -41,7 +40,7 @@ export function SummaryContent({ summary, content, onExport, notionUrl, exportin
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events,jsx-a11y/no-static-element-interactions
-    <div onClick={handleLinkClick}>
+    <div ref={containerRef} onClick={handleLinkClick}>
       {/* TLDR */}
       <Section title="TL;DR" defaultOpen>
         <div class="summary-callout">
@@ -261,7 +260,7 @@ export function SummaryContent({ summary, content, onExport, notionUrl, exportin
         </button>
         <button
           onClick={() => {
-            copyToClipboard(summary, content).then(() => {
+            copyToClipboard(summary, content, containerRef.current).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             });
@@ -595,9 +594,30 @@ export function downloadMarkdown(summary: SummaryDocument, content: ExtractedCon
   URL.revokeObjectURL(url);
 }
 
-async function copyToClipboard(summary: SummaryDocument, content: ExtractedContent | null) {
+async function copyToClipboard(summary: SummaryDocument, content: ExtractedContent | null, containerEl: HTMLElement | null) {
   const md = summaryToMarkdown(summary, content);
-  const html = DOMPurify.sanitize(marked.parse(md, { async: false }) as string);
+
+  // Clone rendered DOM to preserve mermaid SVGs, then clean up UI chrome
+  let html = md; // fallback
+  if (containerEl) {
+    const clone = containerEl.cloneNode(true) as HTMLElement;
+    // Remove export buttons, dismiss buttons, etc.
+    clone.querySelectorAll('.no-print').forEach(el => el.remove());
+    // Expand all collapsed sections
+    clone.querySelectorAll('.section-content').forEach(el => {
+      (el as HTMLElement).style.display = 'block';
+    });
+    // Convert section toggle buttons to headings
+    clone.querySelectorAll('.section-toggle').forEach(btn => {
+      const h3 = document.createElement('h3');
+      // Remove the arrow span, keep only the title text
+      btn.querySelector('span')?.remove();
+      h3.textContent = btn.textContent?.trim() || '';
+      btn.replaceWith(h3);
+    });
+    html = clone.innerHTML;
+  }
+
   const item = new ClipboardItem({
     'text/plain': new Blob([md], { type: 'text/plain' }),
     'text/html': new Blob([html], { type: 'text/html' }),
