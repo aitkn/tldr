@@ -109,6 +109,10 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
   });
   const [providerPicked, setProviderPicked] = useState(false);
   const [showDoneScreen, setShowDoneScreen] = useState(false);
+  // Tracks whether the user has actively engaged with the wizard (picked a provider).
+  // Prevents the settings-sync useEffect from cancelling an in-progress wizard
+  // when auto-save bounces back settings with an API key + onboardingCompleted === undefined.
+  const wizardEngagedRef = useRef(false);
 
   const lastSavedJson = useRef(JSON.stringify(settings));
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -124,9 +128,10 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
     if (settings.onboardingCompleted) {
       setOnboardingStep(null);
     } else if (settings.onboardingCompleted === undefined) {
-      // Old user who never saw onboarding: if they have an API key, skip it
-      // (onboardingCompleted === false means explicit restart — keep wizard)
-      if (settings.providerConfigs[settings.activeProviderId]?.apiKey) {
+      // Old user who never saw onboarding: if they have an API key, skip it.
+      // But don't cancel if the user has actively engaged with the wizard —
+      // that means auto-save bounced back their just-entered API key.
+      if (settings.providerConfigs[settings.activeProviderId]?.apiKey && !wizardEngagedRef.current) {
         setOnboardingStep(null);
       }
     }
@@ -321,6 +326,7 @@ export function SettingsView({ settings, onSave, onTestLLM, onTestNotion, onFetc
 
     // Advance onboarding — skip steps already completed for the new provider
     setProviderPicked(true);
+    wizardEngagedRef.current = true;
     if (onboardingStep === 'provider') {
       const newConfig = updatedConfigs[newProviderId];
       const next = findNextStep('provider', newConfig, newProviderId);
