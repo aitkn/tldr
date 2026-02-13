@@ -1236,10 +1236,11 @@ export function App() {
         const onUpdated = (tid: number, info: chrome.tabs.TabChangeInfo) => {
           if (tid !== tabId || info.status !== 'complete') return;
           chromeObj.tabs.onUpdated.removeListener(onUpdated);
+          clearTimeout(timeoutId);
           scrollToGitHubLine(chromeObj, tabId, lineId);
         };
+        const timeoutId = setTimeout(() => chromeObj.tabs.onUpdated.removeListener(onUpdated), 10000);
         chromeObj.tabs.onUpdated.addListener(onUpdated);
-        setTimeout(() => chromeObj.tabs.onUpdated.removeListener(onUpdated), 10000);
         return;
       }
     } catch { /* fall through */ }
