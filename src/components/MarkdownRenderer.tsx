@@ -165,13 +165,34 @@ const MERMAID_THEME_VARS = {
   },
 } as const;
 
-function getMermaidConfig(theme: 'light' | 'dark') {
+/** Diagram types where cScale colors appear as node backgrounds (need muted fills). */
+const CSCALE_AS_BG_RE = /^\s*(mindmap|timeline|kanban)/m;
+
+/** Override cScale with muted background fills for diagrams that use cScale as node bg.
+ *  Also sets cScaleInv (used by kanban for card backgrounds) to a dark surface color. */
+function bgCScaleVars(theme: 'light' | 'dark'): Record<string, string> {
+  const fills = NODE_FILLS[theme];
+  const strokes = PALETTE[theme];
+  const label = theme === 'dark' ? '#e3e2e6' : '#1a1c1e';
+  const inv = theme === 'dark' ? '#2b2d31' : '#ffffff';
+  const vars: Record<string, string> = {};
+  for (let i = 0; i < 12; i++) {
+    vars[`cScale${i}`] = fills[i % fills.length];
+    vars[`cScalePeer${i}`] = strokes[i % strokes.length];
+    vars[`cScaleLabel${i}`] = label;
+    vars[`cScaleInv${i}`] = inv;
+  }
+  return vars;
+}
+
+function getMermaidConfig(theme: 'light' | 'dark', bgPalette = false) {
   return {
     startOnLoad: false,
     theme: 'base' as const,
     securityLevel: 'strict' as const,
     themeVariables: {
       ...MERMAID_THEME_VARS[theme],
+      ...(bgPalette ? bgCScaleVars(theme) : {}),
       xyChart: {
         backgroundColor: theme === 'dark' ? '#212326' : '#f3f4f6',
         plotColorPalette: PALETTE[theme].join(', '),
@@ -302,6 +323,31 @@ function parseXyChartSeries(source: string): { type: 'line' | 'bar'; name: strin
     series.push({ type: m[1] as 'line' | 'bar', name: m[2] || `Series ${idx}` });
   }
   return series.length >= 2 ? series : null;
+}
+
+/** Node background fills — muted for dark mode, pastel for light mode. */
+const NODE_FILLS = {
+  light: ['#dbe4ff', '#dcfce7', '#fef3c7', '#fee2e2', '#f3e8ff', '#cffafe', '#fce7f3', '#e0e7ff'],
+  dark:  ['#1a3a8a', '#052e16', '#78350f', '#7f1d1d', '#581c87', '#164e63', '#831843', '#312e81'],
+} as const;
+
+/** Replace fill/stroke/color in `style` and `classDef` with theme-appropriate colors.
+ *  Preserves non-color props (stroke-width, stroke-dasharray, etc.). */
+function themeInlineColors(source: string, theme: 'light' | 'dark'): string {
+  const fills = NODE_FILLS[theme];
+  const strokes = PALETTE[theme];
+  const text = theme === 'dark' ? '#dbe4ff' : '#0a2463';
+  let idx = 0;
+  return source.replace(
+    /^(\s*(?:style|classDef)\s+\S+\s+)(.*)$/gm,
+    (_, prefix: string, props: string) => {
+      const i = idx++ % fills.length;
+      const kept = props.split(',').map(p => p.trim())
+        .filter(p => !/^(fill|stroke|color):/.test(p));
+      const themed = [`fill:${fills[i]}`, `stroke:${strokes[i]}`, `color:${text}`, ...kept];
+      return `${prefix}${themed.join(',')}`;
+    },
+  );
 }
 
 /**
@@ -441,7 +487,9 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
         const source = el.dataset.source || el.textContent || '';
         if (!source.trim()) continue;
         const renderId = `mermaid-${Date.now()}-${renderCounter++}`;
-        const renderSource = fixClassDiagramRelations(stackBarSeries(source));
+        const renderSource = themeInlineColors(fixClassDiagramRelations(stackBarSeries(source)), theme);
+        const needsBgPalette = CSCALE_AS_BG_RE.test(source);
+        if (needsBgPalette) mermaid.initialize(getMermaidConfig(theme, true));
         try {
           const { svg, bindFunctions } = await mermaid.render(renderId, renderSource);
           if (cancelled) return;
@@ -470,6 +518,8 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           el.style.display = 'none';
           // Clean up orphaned mermaid render container
           document.getElementById('d' + renderId)?.remove();
+        } finally {
+          if (needsBgPalette) mermaid.initialize(getMermaidConfig(theme));
         }
       }
     })();

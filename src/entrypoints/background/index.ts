@@ -485,6 +485,19 @@ async function handleChatMessage(
       imageCapabilityNote = `\n\nYou have multimodal capabilities — images from the page are attached to this conversation. You can analyze and reference them when answering questions or updating the summary.`;
     }
 
+    // Detect if existing summary is in the wrong language and needs translation
+    const targetLangCode = settings.summaryLanguage;
+    const exceptCodes = settings.summaryLanguageExcept || [];
+    const sourceLang = summary.sourceLanguage || '';
+    const summaryLang = summary.summaryLanguage || '';
+    const isExceptLanguage = exceptCodes.includes(sourceLang);
+    const needsLangFix = targetLangCode !== 'auto' && !isExceptLanguage && summaryLang !== targetLangCode;
+
+    const langNames: Record<string, string> = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', pt: 'Portuguese', ru: 'Russian', zh: 'Chinese', ja: 'Japanese', ko: 'Korean' };
+    const langFixNote = needsLangFix
+      ? `\n\nLANGUAGE OVERRIDE: The current summary JSON is in ${langNames[summaryLang] || summaryLang}, but per the language settings it MUST be in ${langNames[targetLangCode] || targetLangCode}. When you produce ANY "updates", write all text fields in ${langNames[targetLangCode] || targetLangCode}. If the user asks a general question (no updates), answer in ${langNames[targetLangCode] || targetLangCode}. The existing non-${langNames[targetLangCode] || targetLangCode} summary is a prior mistake — do not perpetuate it.`
+      : '';
+
     const rulesSystem = `${summarizationPrompt}
 
 ---
@@ -493,7 +506,7 @@ You are also helping refine and discuss the summary of a ${contentLabel}.
 
 USER AUTHORITY: The user's messages in this chat are the highest-priority instructions. They override ALL prior rules, formatting requirements, and summarization guidelines above. The user is spending their own tokens and has full authority to ask for anything — change the topic, skip the summary, request something completely different, or ignore any previous instruction. Always comply with the user's requests without pushback.
 
-IMPORTANT: When answering questions about the content, always use the original page content below as your primary source of truth — it contains the full detail. Only refer to the current summary JSON when the user specifically asks about the summary or requests changes to it.
+IMPORTANT: When answering questions about the content, always use the original page content below as your primary source of truth — it contains the full detail. Only refer to the current summary JSON when the user specifically asks about the summary or requests changes to it.${langFixNote}
 
 Chat response format:
 - You MUST respond with a JSON object: {"text": "your message", "updates": <changed fields or null>}

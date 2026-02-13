@@ -16,7 +16,7 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
   if (language === 'auto') {
     langInstruction = 'Respond in the same language as the source content. Match the content language exactly.';
   } else if (exceptLangs.length > 0) {
-    langInstruction = `LANGUAGE RULE: If the source content is written in ${exceptLangs.join(' or ')}, you MUST respond in that same language — do NOT translate it. For all other source languages, translate and respond in ${targetLang}.`;
+    langInstruction = `LANGUAGE RULE (MANDATORY — no exceptions): If the source content is written in ${exceptLangs.join(' or ')}, you MUST respond in that same language — do NOT translate it. For ALL other source languages, you MUST translate and write the ENTIRE summary in ${targetLang}. This applies unconditionally — even if a previous summary exists in another language, you must produce ${targetLang} output. Never inherit the source language into your response unless it is ${exceptLangs.join(' or ')}.`;
   } else {
     langInstruction = `Respond in ${targetLang}.`;
   }
@@ -307,7 +307,7 @@ export function getSystemPrompt(detailLevel: 'brief' | 'standard' | 'detailed', 
   guidelines.push(
     `- "tags": ${d.tags} short, lowercase tags.`,
     `- "sourceLanguage" must be the ISO 639-1 code of the original content language (e.g. "en", "ru", "fr").`,
-    `- "summaryLanguage" must be the ISO 639-1 code of the language you wrote the summary in (e.g. "en", "ru"). REMINDER: Re-read the language instruction at the top of this prompt — if it says to NOT translate certain source languages, you MUST obey. Write summaryLanguage to match the language you actually used.`,
+    `- "summaryLanguage" must be the ISO 639-1 code of the language you wrote the summary in. CRITICAL: This must match the LANGUAGE RULE at the top. If the rule says to respond in ${targetLang}, then summaryLanguage MUST be "${language}" and ALL text fields must be in ${targetLang}. Do NOT write the summary in the source language unless it is explicitly listed as an exception.`,
   );
   if (!isGitHub) {
     guidelines.push(

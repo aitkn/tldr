@@ -72,7 +72,7 @@ export const MERMAID_ESSENTIAL_RULES = `## MERMAID SYNTAX RULES
 ## MERMAID COLORS & LEGENDS
 - Do NOT add YAML frontmatter with config/theme/themeVariables — colors are applied automatically.
 - Do NOT add emoji legend lines (🟦 🟧 etc.) below diagrams — legends are generated automatically.
-- For flowchart node styling, classDef in diagram body is still allowed.`;
+- Do NOT use \`style\`, \`classDef\`, or \`class\` directives with fill/stroke/color — the app handles all theming (light & dark mode). These directives are stripped at render time.`;
 
 /**
  * Map from mermaid diagram keyword → raw doc content.

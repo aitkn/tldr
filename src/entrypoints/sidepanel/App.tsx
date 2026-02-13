@@ -1930,9 +1930,27 @@ function extractJsonAndText(raw: string): { updates: Partial<SummaryDocument> | 
     const braceEnd = findMatchingBrace(raw, braceIdx);
     if (braceEnd !== -1) {
       const parsed = parseJsonSafe(raw.slice(braceIdx, braceEnd + 1)) as Record<string, unknown> | null;
-      if (parsed && parsed.tldr && parsed.summary) {
-        const text = (raw.slice(0, braceIdx) + raw.slice(braceEnd + 1)).trim();
-        return { updates: normalizeSummary(parsed), text };
+      if (parsed && typeof parsed === 'object') {
+        // New chat format: {"text": "...", "updates": ...}
+        if ('text' in parsed) {
+          const text = typeof parsed.text === 'string' ? parsed.text : '';
+          const source = parsed.updates ?? parsed.summary;
+          let updates: Partial<SummaryDocument> | null = null;
+          if (source && typeof source === 'object') {
+            if (parsed.updates) {
+              updates = sanitizePartialUpdate(source as Record<string, unknown>);
+            } else {
+              const s = source as Record<string, unknown>;
+              if (s.tldr && s.summary) updates = normalizeSummary(s);
+            }
+          }
+          return { updates, text };
+        }
+        // Legacy format: {tldr, summary, ...}
+        if (parsed.tldr && parsed.summary) {
+          const text = (raw.slice(0, braceIdx) + raw.slice(braceEnd + 1)).trim();
+          return { updates: normalizeSummary(parsed), text };
+        }
       }
     }
   }
